@@ -12,7 +12,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from src.config.settings import ConfigManager
 from src.utils.logger import Logger
 from src.capture.camera_manager import CameraManager
-from src.capture.trigger_controller import TriggerController
+from src.capture.trigger_controller import HardwareTriggerController as TriggerController
 from src.lighting.light_controller import ModbusLightController
 from src.preprocessing.image_processor import ImagePreprocessor
 from src.buffer.ring_buffer import RingBuffer
@@ -45,11 +45,17 @@ class CaptureService:
         )
 
         self.camera_manager = CameraManager(self.config_manager)
+
+        light_cfg = self.config_manager.get_lighting_config()
         self.light_controller = ModbusLightController(
             channels=self.config_manager.get_light_channels(),
-            host=self.config_manager.get_lighting_config().get("host", "192.168.1.200"),
-            port=self.config_manager.get_lighting_config().get("port", 502)
+            host=light_cfg.get("host", "192.168.1.200"),
+            port=light_cfg.get("port", 502),
+            slave_id=light_cfg.get("slave_id", 1),
+            presets=light_cfg.get("presets", {}),
+            allow_mock_fallback=light_cfg.get("allow_mock_fallback", False)
         )
+
         self.image_preprocessor = ImagePreprocessor(self.config_manager)
         self.message_sender = MessageSender(self.config_manager, self.ring_buffer, self.local_cache)
         self.camera_monitor = CameraMonitor(self.config_manager, self.camera_manager)
@@ -72,7 +78,9 @@ class CaptureService:
             logger.error("Failed to initialize cameras")
             return
 
-        self.light_controller.connect()
+        light_connected = self.light_controller.connect()
+        if not light_connected:
+            logger.warning("Light controller not connected - check hardware connection")
 
         self.message_sender.start()
         self.camera_monitor.start()
@@ -262,6 +270,10 @@ class CaptureService:
                         success = service.message_sender.reconnect()
                         self._send_json(200, {"success": success})
 
+                    elif path == "/api/storage/reconnect":
+                        success = service.message_sender.reconnect_storage()
+                        self._send_json(200, {"success": success})
+
                     else:
                         self._send_json(404, {"error": "Not found"})
 
@@ -296,6 +308,10 @@ class CaptureService:
             "camera_count": len(self.camera_manager.cameras),
             "mq_connected": self.message_sender._producer.is_connected() if self.message_sender._producer else False,
             "light_connected": self.light_controller.is_connected(),
+            "light_hardware_ready": self.light_controller.hardware_ready if hasattr(self.light_controller, 'hardware_ready') else False,
+            "light_mock_mode": self.light_controller.is_mock_mode if hasattr(self.light_controller, 'is_mock_mode') else False,
+            "trigger_mode": "hardware" if hasattr(self.trigger_controller, 'simulation_mode') and not self.trigger_controller.simulation_mode else "simulation",
+            "ptp_enabled": self.trigger_controller.enable_ptp if hasattr(self.trigger_controller, 'enable_ptp') else False,
             "cameras": self._get_cameras_status(),
             "lights": [
                 {

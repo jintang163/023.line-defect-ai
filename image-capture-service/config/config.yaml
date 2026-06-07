@@ -1,152 +1,172 @@
 service:
-  name: line-defect-capture
-  instance_id: capture-001
-  log_level: INFO
-  http_port: 8000
+  name: "image-capture-service"
+  version: "1.0.0"
+  port: 8080
+  metrics_port: 9090
+  log_level: "INFO"
+
+trigger:
+  gpio_pin: 17
+  debounce_ms: 50
+  simulation_mode: false
+  enable_ptp: true
+  hardware_trigger_mode: "parallel"
+  trigger_output_pins: [18, 19, 20]
+  simulation_interval_sec: 2.0
 
 cameras:
-  - id: cam-top-01
-    name: 顶部相机
-    type: mock
-    position: top
-    ip: 192.168.1.101
-    serial_number: TOP001
-    exposure_time: 5000
-    gain: 1.0
-    width: 1920
-    height: 1200
-    pixel_format: BayerRG8
-    trigger_mode: external
-    enabled: true
-    
-  - id: cam-bottom-01
-    name: 底部相机
-    type: mock
-    position: bottom
-    ip: 192.168.1.102
-    serial_number: BOTTOM001
-    exposure_time: 6000
-    gain: 1.2
-    width: 1920
-    height: 1200
-    pixel_format: BayerRG8
-    trigger_mode: external
-    enabled: true
-    
-  - id: cam-side-01
-    name: 侧方相机
-    type: mock
-    position: side
-    ip: 192.168.1.103
-    serial_number: SIDE001
-    exposure_time: 5500
-    gain: 1.1
-    width: 1280
-    height: 1024
-    pixel_format: BayerRG8
-    trigger_mode: external
-    enabled: true
+  - camera_id: "cam-top-001"
+    position: "top"
+    type: "basler"
+    serial_number: "22456789"
+    exposure_us: 5000
+    gain_db: 0.0
+    width: 2448
+    height: 2048
+    pixel_format: "BayerRG8"
+    trigger_mode: "hardware"
+    trigger_source: "Line1"
+    ip_address: "192.168.1.101"
+
+  - camera_id: "cam-bottom-001"
+    position: "bottom"
+    type: "basler"
+    serial_number: "22456790"
+    exposure_us: 5000
+    gain_db: 0.0
+    width: 2448
+    height: 2048
+    pixel_format: "BayerRG8"
+    trigger_mode: "hardware"
+    trigger_source: "Line1"
+    ip_address: "192.168.1.102"
+
+  - camera_id: "cam-side-001"
+    position: "side"
+    type: "basler"
+    serial_number: "22456791"
+    exposure_us: 8000
+    gain_db: 2.0
+    width: 2448
+    height: 2048
+    pixel_format: "BayerRG8"
+    trigger_mode: "hardware"
+    trigger_source: "Line1"
+    ip_address: "192.168.1.103"
 
 lighting:
-  controller_type: modbus
-  host: 192.168.1.200
-  port: 502
+  controller_type: "modbus"
+  modbus_host: "192.168.1.200"
+  modbus_port: 502
+  modbus_slave_id: 1
+  allow_mock_fallback: false
   channels:
-    - id: ch-top
-      name: 顶部光源
-      mode: strobe
-      brightness: 80
-      color_temp: 5500
-      strobe_delay: 0
-      strobe_width: 1000
-      
-    - id: ch-bottom
-      name: 底部光源
-      mode: strobe
-      brightness: 75
-      color_temp: 5500
-      strobe_delay: 0
-      strobe_width: 1000
-      
-    - id: ch-side
-      name: 侧方光源
-      mode: continuous
-      brightness: 60
+    - channel: 1
+      name: "top_light"
+      mode: "strobe"
+      default_brightness: 80
+      default_color_temp: 5500
+
+    - channel: 2
+      name: "bottom_light"
+      mode: "strobe"
+      default_brightness: 80
+      default_color_temp: 5500
+
+    - channel: 3
+      name: "side_light"
+      mode: "constant"
+      default_brightness: 60
+      default_color_temp: 6500
+
+  presets:
+    metal:
+      brightness: 85
       color_temp: 6500
+      mode: "strobe"
+    glass:
+      brightness: 50
+      color_temp: 4000
+      mode: "constant"
+    plastic:
+      brightness: 70
+      color_temp: 5000
+      mode: "strobe"
 
 preprocessing:
-  enable_bayer_conversion: true
-  enable_undistort: true
-  enable_roi_crop: true
-  enable_resize: true
-  
-  distortion_params:
-    camera_matrix:
-      - [1000.0, 0.0, 960.0]
-      - [0.0, 1000.0, 600.0]
-      - [0.0, 0.0, 1.0]
-    dist_coeffs: [0.1, -0.2, 0.0, 0.0, 0.1]
-  
-  roi:
+  enable: true
+  bayer_conversion: true
+  bayer_pattern: "RG"
+  distortion_correction: true
+  camera_matrix: [[2300, 0, 1224], [0, 2300, 1024], [0, 0, 1]]
+  distortion_coeffs: [-0.2, 0.1, 0.0, 0.0, 0.0]
+  roi_crop:
+    enable: false
     x: 100
     y: 100
-    width: 1720
-    height: 1000
-  
+    width: 2248
+    height: 1848
   resize:
-    width: 960
-    height: 600
-    interpolation: linear
+    enable: false
+    target_width: 1224
+    target_height: 1024
 
 buffer:
-  ring_buffer_size: 100
-  local_cache_dir: ./data/cache
-  max_cache_size_gb: 10
-  retry_interval: 30
-  max_retry: 10
+  size: 100
+  max_workers: 4
+
+local_cache:
+  enable: true
+  directory: "./data/cache"
+  max_disk_gb: 50
+  retry_interval_sec: 30
+  retry_max_attempts: 10
 
 messaging:
-  type: rabbitmq
+  type: "rabbitmq"
+  host: "localhost"
+  port: 5672
+  username: "guest"
+  password: "guest"
+  exchange: "line-defect-exchange"
+  queue: "image-capture-queue"
+  routing_key: "image.captured"
   compression: true
   quality: 85
-  
-  rabbitmq:
-    host: localhost
-    port: 5672
-    username: admin
-    password: admin
-    virtual_host: /defect
-    exchange: defect.images
-    routing_key: image.raw
-    queue: defect.image.queue
-    exchange_type: direct
-    durable: true
-    
-  kafka:
-    brokers:
-      - localhost:9092
-    topic: defect-images
-    client_id: capture-service
-    compression_type: gzip
-    acks: 1
+  embed_images_in_mq: false
+
+  image_storage:
+    type: "minio"
+    endpoint: "localhost:9000"
+    access_key: "minioadmin"
+    secret_key: "minioadmin"
+    bucket: "defect-images"
+    use_ssl: false
+    use_local_fallback: true
+    local_fallback_dir: "./data/storage"
+
+redis:
+  host: "localhost"
+  port: 6379
+  db: 0
+  password: ""
+  stream_name: "line-defect-images"
+  max_stream_length: 10000
 
 monitoring:
   enable_prometheus: true
-  prometheus_port: 9090
-  status_report_interval: 5
-  health_check_interval: 10
-  alert_webhook: http://localhost:8080/api/alerts
-  enable_email_alert: false
-  smtp:
-    host: smtp.example.com
-    port: 587
-    username: alert@example.com
-    password: password
-    recipients:
-      - engineer@example.com
+  metrics_port: 9090
+  health_check_interval_sec: 5
+  alert_webhook_url: ""
+  alert_email: ""
 
-trigger:
-  sensor_gpio_pin: 17
-  debounce_ms: 50
-  simulation_mode: true
-  simulation_interval: 2.0
+api:
+  host: "0.0.0.0"
+  port: 8080
+  enable_cors: true
+  docs_enable: true
+
+metadata:
+  line_id: "line-001"
+  station_id: "station-001"
+  factory_id: "factory-001"

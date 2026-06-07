@@ -1,17 +1,59 @@
 global:
   scrape_interval: 15s
   evaluation_interval: 15s
+  external_labels:
+    monitor: 'line-defect-monitor'
 
 scrape_configs:
-  - job_name: 'image-capture'
+  - job_name: 'image-capture-service'
     static_configs:
-      - targets: ['localhost:9090']
+      - targets: ['image-capture:9090']
     metrics_path: /metrics
+    scrape_interval: 5s
+    labels:
+      service: 'image-capture'
+      role: 'edge-device'
 
   - job_name: 'rabbitmq'
     static_configs:
       - targets: ['rabbitmq:15692']
+    metrics_path: /metrics
+    scrape_interval: 15s
+    labels:
+      service: 'rabbitmq'
 
   - job_name: 'redis'
     static_configs:
-      - targets: ['redis:6379']
+      - targets: ['redis-exporter:9121']
+    metrics_path: /metrics
+    scrape_interval: 15s
+    labels:
+      service: 'redis'
+
+  - job_name: 'minio'
+    static_configs:
+      - targets: ['minio:9000']
+    metrics_path: /minio/v2/metrics/cluster
+    scrape_interval: 15s
+    params:
+      'x-minio-extract': ['list,ilm,replication,internal,webhook,lambda']
+    basic_auth:
+      username: 'minioadmin'
+      password: 'minioadmin'
+    labels:
+      service: 'minio'
+
+  - job_name: 'node-exporter'
+    static_configs:
+      - targets: ['node-exporter:9100']
+    scrape_interval: 15s
+    labels:
+      service: 'node'
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ['alertmanager:9093']
+
+rule_files:
+  - '/etc/prometheus/rules/*.yml'

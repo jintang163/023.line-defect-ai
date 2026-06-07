@@ -81,6 +81,7 @@ class CapturedImage:
     timestamp: float
     raw_data: np.ndarray
     processed_data: Optional[np.ndarray] = None
+    image_url: Optional[str] = None
     width: int = 0
     height: int = 0
     pixel_format: str = ""
@@ -131,6 +132,7 @@ class ImageMessage:
                     "height": img.height,
                     "pixel_format": img.pixel_format,
                     "trigger_count": img.trigger_count,
+                    "image_url": img.image_url,
                     "metadata": img.metadata
                 }
                 for img in self.images

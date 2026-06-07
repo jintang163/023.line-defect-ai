@@ -2,74 +2,206 @@ version: '3.8'
 
 services:
   image-capture:
-    build: .
-    container_name: line-defect-capture
-    restart: unless-stopped
-    ports:
-      - "8000:8000"
-      - "9090:9090"
-    volumes:
-      - ./config:/app/config
-      - ./data:/app/data
-      - ./logs:/app/logs
-    environment:
-      - CONFIG_PATH=/app/config/config.yaml
-      - TZ=Asia/Shanghai
-    network_mode: host
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    container_name: image-capture-service
     privileged: true
+    network_mode: "host"
+    devices:
+      - /dev/gpiomem:/dev/gpiomem
+      - /dev/mem:/dev/mem
+    volumes:
+      - ./data:/app/data
+      - ./config:/app/config:ro
+      - /dev/bus/usb:/dev/bus/usb
+    environment:
+      - TZ=Asia/Shanghai
+      - PYTHONUNBUFFERED=1
+      - CAMERA_SDK_PATH=/opt/camera-sdk
     depends_on:
       - rabbitmq
       - redis
+      - minio
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
 
   rabbitmq:
-    image: rabbitmq:3.12-management
-    container_name: line-defect-rabbitmq
-    restart: unless-stopped
+    image: rabbitmq:3.12-management-alpine
+    container_name: rabbitmq
+    hostname: rabbitmq
     ports:
       - "5672:5672"
       - "15672:15672"
+      - "15692:15692"
     environment:
-      - RABBITMQ_DEFAULT_USER=admin
-      - RABBITMQ_DEFAULT_PASS=admin
-      - RABBITMQ_DEFAULT_VHOST=/defect
+      RABBITMQ_DEFAULT_USER: guest
+      RABBITMQ_DEFAULT_PASS: guest
+      RABBITMQ_PLUGINS_DIR: /usr/lib/rabbitmq/plugins
     volumes:
       - rabbitmq-data:/var/lib/rabbitmq
+      - ./docker/rabbitmq/enabled_plugins:/etc/rabbitmq/enabled_plugins:ro
+    command: >
+      sh -c "rabbitmq-plugins enable --offline rabbitmq_prometheus rabbitmq_shovel rabbitmq_shovel_management &&
+             rabbitmq-server"
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "check_port_connectivity"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    restart: unless-stopped
 
   redis:
-    image: redis:7-alpine
-    container_name: line-defect-redis
-    restart: unless-stopped
+    image: redis:7.2-alpine
+    container_name: redis
+    hostname: redis
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory", "1gb", "--maxmemory-policy", "allkeys-lru"]
     ports:
       - "6379:6379"
-    command: redis-server --appendonly yes
     volumes:
       - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped
+
+  redis-exporter:
+    image: oliver006/redis_exporter:v1.55.0-alpine
+    container_name: redis-exporter
+    hostname: redis-exporter
+    command: >
+      -redis.addr=redis:6379
+      -namespace=redis
+      -web.listen-address=:9121
+    ports:
+      - "9121:9121"
+    environment:
+      - REDIS_ADDR=redis://redis:6379
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  minio:
+    image: minio/minio:RELEASE.2024-01-01T16-36-33Z
+    container_name: minio
+    hostname: minio
+    command: server /data --console-address ":9001"
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+      MINIO_BROWSER_REDIRECT_URL: http://localhost:9001
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+    restart: unless-stopped
+
+  create-buckets:
+    image: minio/mc:RELEASE.2024-01-01T18-54-09Z
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      /usr/bin/mc alias set minio http://minio:9000 minioadmin minioadmin;
+      /usr/bin/mc mb --ignore-existing minio/defect-images;
+      /usr/bin/mc anonymous set public minio/defect-images;
+      /usr/bin/mc version enable minio/defect-images;
+      exit 0;
+      "
 
   prometheus:
-    image: prom/prometheus:latest
-    container_name: line-defect-prometheus
-    restart: unless-stopped
+    image: prom/prometheus:v2.48.0
+    container_name: prometheus
+    hostname: prometheus
     ports:
-      - "9091:9090"
+      - "9090:9090"
     volumes:
-      - ./docker/prometheus.yml:/etc/prometheus/prometheus.yml
+      - ./docker/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./docker/rules:/etc/prometheus/rules:ro
       - prometheus-data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=15d'
+      - '--web.enable-lifecycle'
+    depends_on:
+      - image-capture
+      - redis-exporter
+      - node-exporter
+    restart: unless-stopped
 
   grafana:
-    image: grafana/grafana:latest
-    container_name: line-defect-grafana
-    restart: unless-stopped
+    image: grafana/grafana:10.2.3
+    container_name: grafana
+    hostname: grafana
     ports:
       - "3000:3000"
     environment:
-      - GF_SECURITY_ADMIN_PASSWORD=admin123
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin123
+      GF_INSTALL_PLUGINS: "grafana-piechart-panel,grafana-clock-panel"
     volumes:
+      - ./docker/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./docker/grafana/dashboards:/var/lib/grafana/dashboards:ro
       - grafana-data:/var/lib/grafana
     depends_on:
       - prometheus
+    restart: unless-stopped
+
+  alertmanager:
+    image: prom/alertmanager:v0.27.0
+    container_name: alertmanager
+    hostname: alertmanager
+    ports:
+      - "9093:9093"
+    volumes:
+      - ./docker/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - alertmanager-data:/alertmanager
+    command:
+      - '--config.file=/etc/alertmanager/alertmanager.yml'
+      - '--storage.path=/alertmanager'
+    restart: unless-stopped
+
+  node-exporter:
+    image: prom/node-exporter:v1.7.0
+    container_name: node-exporter
+    hostname: node-exporter
+    ports:
+      - "9100:9100"
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+    command:
+      - '--path.procfs=/host/proc'
+      - '--path.sysfs=/host/sys'
+      - '--collector.filesystem.mount-points-exclude'
+      - '^/(sys|proc|dev|host|etc)($$|/)'
+    restart: unless-stopped
 
 volumes:
   rabbitmq-data:
   redis-data:
+  minio-data:
   prometheus-data:
   grafana-data:
+  alertmanager-data:
+
+networks:
+  default:
+    name: line-defect-network
+    driver: bridge
