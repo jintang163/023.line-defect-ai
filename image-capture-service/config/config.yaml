@@ -1,0 +1,152 @@
+service:
+  name: line-defect-capture
+  instance_id: capture-001
+  log_level: INFO
+  http_port: 8000
+
+cameras:
+  - id: cam-top-01
+    name: 顶部相机
+    type: mock
+    position: top
+    ip: 192.168.1.101
+    serial_number: TOP001
+    exposure_time: 5000
+    gain: 1.0
+    width: 1920
+    height: 1200
+    pixel_format: BayerRG8
+    trigger_mode: external
+    enabled: true
+    
+  - id: cam-bottom-01
+    name: 底部相机
+    type: mock
+    position: bottom
+    ip: 192.168.1.102
+    serial_number: BOTTOM001
+    exposure_time: 6000
+    gain: 1.2
+    width: 1920
+    height: 1200
+    pixel_format: BayerRG8
+    trigger_mode: external
+    enabled: true
+    
+  - id: cam-side-01
+    name: 侧方相机
+    type: mock
+    position: side
+    ip: 192.168.1.103
+    serial_number: SIDE001
+    exposure_time: 5500
+    gain: 1.1
+    width: 1280
+    height: 1024
+    pixel_format: BayerRG8
+    trigger_mode: external
+    enabled: true
+
+lighting:
+  controller_type: modbus
+  host: 192.168.1.200
+  port: 502
+  channels:
+    - id: ch-top
+      name: 顶部光源
+      mode: strobe
+      brightness: 80
+      color_temp: 5500
+      strobe_delay: 0
+      strobe_width: 1000
+      
+    - id: ch-bottom
+      name: 底部光源
+      mode: strobe
+      brightness: 75
+      color_temp: 5500
+      strobe_delay: 0
+      strobe_width: 1000
+      
+    - id: ch-side
+      name: 侧方光源
+      mode: continuous
+      brightness: 60
+      color_temp: 6500
+
+preprocessing:
+  enable_bayer_conversion: true
+  enable_undistort: true
+  enable_roi_crop: true
+  enable_resize: true
+  
+  distortion_params:
+    camera_matrix:
+      - [1000.0, 0.0, 960.0]
+      - [0.0, 1000.0, 600.0]
+      - [0.0, 0.0, 1.0]
+    dist_coeffs: [0.1, -0.2, 0.0, 0.0, 0.1]
+  
+  roi:
+    x: 100
+    y: 100
+    width: 1720
+    height: 1000
+  
+  resize:
+    width: 960
+    height: 600
+    interpolation: linear
+
+buffer:
+  ring_buffer_size: 100
+  local_cache_dir: ./data/cache
+  max_cache_size_gb: 10
+  retry_interval: 30
+  max_retry: 10
+
+messaging:
+  type: rabbitmq
+  compression: true
+  quality: 85
+  
+  rabbitmq:
+    host: localhost
+    port: 5672
+    username: admin
+    password: admin
+    virtual_host: /defect
+    exchange: defect.images
+    routing_key: image.raw
+    queue: defect.image.queue
+    exchange_type: direct
+    durable: true
+    
+  kafka:
+    brokers:
+      - localhost:9092
+    topic: defect-images
+    client_id: capture-service
+    compression_type: gzip
+    acks: 1
+
+monitoring:
+  enable_prometheus: true
+  prometheus_port: 9090
+  status_report_interval: 5
+  health_check_interval: 10
+  alert_webhook: http://localhost:8080/api/alerts
+  enable_email_alert: false
+  smtp:
+    host: smtp.example.com
+    port: 587
+    username: alert@example.com
+    password: password
+    recipients:
+      - engineer@example.com
+
+trigger:
+  sensor_gpio_pin: 17
+  debounce_ms: 50
+  simulation_mode: true
+  simulation_interval: 2.0
