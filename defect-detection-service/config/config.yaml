@@ -102,6 +102,11 @@ production:
   snapshot_interval_count: 1000
   consecutive_ng_threshold: 10
   max_snapshots_per_product: 1000
+  enable_database_persistence: true
+  sqlite_db_path: "./data/yield_snapshots.db"
+  enable_api_upload: false
+  api_upload_url: ""
+  api_upload_timeout_ms: 5000
 
 manual_override:
   max_history: 10000

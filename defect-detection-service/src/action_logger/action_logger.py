@@ -9,7 +9,7 @@ import os
 from src.utils.schemas import (
     ActionLogEntry, ActionLogType,
     DetectionOutput, PLCCommand, PLCCommandResult,
-    AlertMessage, ManualOverrideRecord
+    AlertMessage, ManualOverrideRecord, ManualOverrideAction
 )
 from src.utils.logger import Logger
 

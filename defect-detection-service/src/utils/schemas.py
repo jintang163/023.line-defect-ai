@@ -576,6 +576,7 @@ class ManualOverrideAction(Enum):
 @dataclass
 class ManualOverrideRecord:
     override_id: str
+    sequence_id: str
     detection_id: str
     action: ManualOverrideAction
     operator: str
@@ -586,12 +587,13 @@ class ManualOverrideRecord:
     details: Dict[str, Any] = field(default_factory=dict)
 
     @classmethod
-    def create(cls, detection_id: str, action: ManualOverrideAction,
+    def create(cls, sequence_id: str, detection_id: str, action: ManualOverrideAction,
                operator: str, reason: str,
                original_result: DetectionResult, final_result: DetectionResult,
                details: Optional[Dict[str, Any]] = None) -> "ManualOverrideRecord":
         return cls(
             override_id=str(uuid.uuid4()),
+            sequence_id=sequence_id,
             detection_id=detection_id,
             action=action,
             operator=operator,
@@ -605,6 +607,7 @@ class ManualOverrideRecord:
     def to_dict(self) -> Dict[str, Any]:
         return {
             "override_id": self.override_id,
+            "sequence_id": self.sequence_id,
             "detection_id": self.detection_id,
             "action": self.action.value,
             "operator": self.operator,

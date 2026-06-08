@@ -9,13 +9,26 @@ from typing import Dict, Any, Optional
 import numpy as np
 import cv2
 
+try:
+    import sqlite3
+    SQLITE_AVAILABLE = True
+except ImportError:
+    SQLITE_AVAILABLE = False
+
+try:
+    import requests
+    REQUESTS_AVAILABLE = True
+except ImportError:
+    REQUESTS_AVAILABLE = False
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src.config.settings import ConfigManager
 from src.utils.logger import Logger
 from src.utils.schemas import (
     ImageData, DetectionOutput, ProductConfig, AlgorithmType,
-    ManualOverrideAction, DetectionResult
+    ManualOverrideAction, DetectionResult, AlertAction,
+    YieldSnapshot
 )
 from src.algorithm_manager import AlgorithmManager
 from src.result_annotator import ResultAnnotator
@@ -55,6 +68,10 @@ class DefectDetectionService:
         self.config_manager = ConfigManager(config_path)
         self._is_running = False
         self._shutdown_event = threading.Event()
+
+        self._yield_db_conn: Optional[sqlite3.Connection] = None
+        self._yield_db_enabled = False
+        self._yield_api_enabled = False
 
         self._init_components()
         self._init_callbacks()
@@ -116,16 +133,21 @@ class DefectDetectionService:
                         self.plc_connector.send_stop_line_command("", reason)
                     self.production_tracker.register_emergency_stop_callback(on_emergency_stop)
 
-                if self.action_logger and self.action_logger.enabled:
+                self._init_yield_persistence(production_config)
+
+                if self._yield_db_enabled or self._yield_api_enabled:
                     def on_snapshot_upload(snapshot):
-                        pass
+                        self._persist_yield_snapshot(snapshot)
                     self.production_tracker.register_snapshot_callback(on_snapshot_upload)
 
         self.manual_override_manager = None
         if MANUAL_OVERRIDE_AVAILABLE:
             override_config = self.config_manager.get_manual_override_config()
             max_history = override_config.get("max_history", 10000)
-            self.manual_override_manager = ManualOverrideManager(max_history=max_history)
+            self.manual_override_manager = ManualOverrideManager(
+                max_history=max_history,
+                plc_connector=self.plc_connector
+            )
 
             if self.action_logger and self.action_logger.enabled:
                 def on_manual_override(record):
@@ -136,6 +158,121 @@ class DefectDetectionService:
         self.result_producer = ResultProducer(msg_config)
 
         logger.info("All components initialized")
+
+    def _init_yield_persistence(self, production_config: Dict[str, Any]):
+        self._yield_db_enabled = production_config.get("enable_database_persistence", True) and SQLITE_AVAILABLE
+        self._yield_api_enabled = production_config.get("enable_api_upload", False) and REQUESTS_AVAILABLE
+
+        if self._yield_db_enabled:
+            db_path = production_config.get("sqlite_db_path", "./data/yield_snapshots.db")
+            db_dir = os.path.dirname(db_path)
+            if db_dir and not os.path.exists(db_dir):
+                os.makedirs(db_dir, exist_ok=True)
+
+            try:
+                self._yield_db_conn = sqlite3.connect(db_path, check_same_thread=False)
+                self._init_yield_db_schema()
+                logger.info(f"✅ 良率快照数据库已初始化: {db_path}")
+            except Exception as e:
+                logger.error(f"初始化良率快照数据库失败: {e}", exc_info=True)
+                self._yield_db_enabled = False
+
+        if self._yield_api_enabled:
+            api_url = production_config.get("api_upload_url", "")
+            if not api_url:
+                logger.warning("API上传URL未配置，已禁用API上传")
+                self._yield_api_enabled = False
+            else:
+                logger.info(f"✅ 良率快照API上传已启用: {api_url}")
+
+    def _init_yield_db_schema(self):
+        if not self._yield_db_conn:
+            return
+
+        cursor = self._yield_db_conn.cursor()
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS yield_snapshots (
+                snapshot_id TEXT PRIMARY KEY,
+                product_id TEXT NOT NULL,
+                timestamp REAL NOT NULL,
+                total_count INTEGER NOT NULL,
+                ok_count INTEGER NOT NULL,
+                ng_count INTEGER NOT NULL,
+                yield_rate REAL NOT NULL,
+                period_start REAL NOT NULL,
+                period_end REAL NOT NULL,
+                defect_distribution TEXT,
+                details TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_snapshot_product_id ON yield_snapshots(product_id)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_snapshot_timestamp ON yield_snapshots(timestamp)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_snapshot_yield_rate ON yield_snapshots(yield_rate)")
+
+        self._yield_db_conn.commit()
+
+    def _persist_yield_snapshot(self, snapshot: YieldSnapshot):
+        try:
+            if self._yield_db_enabled and self._yield_db_conn:
+                self._save_snapshot_to_db(snapshot)
+
+            if self._yield_api_enabled:
+                self._upload_snapshot_to_api(snapshot)
+
+        except Exception as e:
+            logger.error(f"持久化良率快照失败: {e}", exc_info=True)
+
+    def _save_snapshot_to_db(self, snapshot: YieldSnapshot):
+        if not self._yield_db_conn:
+            return
+
+        try:
+            cursor = self._yield_db_conn.cursor()
+            cursor.execute("""
+                INSERT INTO yield_snapshots 
+                (snapshot_id, product_id, timestamp, total_count, ok_count, ng_count, 
+                 yield_rate, period_start, period_end, defect_distribution, details)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                snapshot.snapshot_id,
+                snapshot.product_id,
+                snapshot.timestamp,
+                snapshot.total_count,
+                snapshot.ok_count,
+                snapshot.ng_count,
+                snapshot.yield_rate,
+                snapshot.period_start,
+                snapshot.period_end,
+                json.dumps(snapshot.defect_distribution, ensure_ascii=False),
+                json.dumps(snapshot.details, ensure_ascii=False)
+            ))
+            self._yield_db_conn.commit()
+            logger.info(f"💾 良率快照已保存到数据库: {snapshot.snapshot_id}")
+        except Exception as e:
+            logger.warning(f"保存良率快照到数据库失败: {e}")
+
+    def _upload_snapshot_to_api(self, snapshot: YieldSnapshot):
+        if not REQUESTS_AVAILABLE:
+            return
+
+        production_config = self.config_manager.get_production_config()
+        api_url = production_config.get("api_upload_url", "")
+        timeout = production_config.get("api_upload_timeout_ms", 5000) / 1000.0
+
+        if not api_url:
+            return
+
+        try:
+            payload = snapshot.to_dict()
+            response = requests.post(api_url, json=payload, timeout=timeout)
+            if response.status_code == 200:
+                logger.info(f"🌐 良率快照已上传到API: {snapshot.snapshot_id}")
+            else:
+                logger.warning(f"上传良率快照到API失败: HTTP {response.status_code} - {response.text}")
+        except Exception as e:
+            logger.warning(f"上传良率快照到API失败: {e}")
 
     def _init_callbacks(self):
         self.message_consumer.set_callback(self._on_image_received)
@@ -179,6 +316,13 @@ class DefectDetectionService:
             self.action_logger.stop()
             logger.info("Action logger stopped")
 
+        if self._yield_db_conn:
+            try:
+                self._yield_db_conn.close()
+                logger.info("Yield snapshot database connection closed")
+            except Exception as e:
+                logger.warning(f"Error closing yield snapshot database: {e}")
+
         if hasattr(self, '_http_server'):
             self._http_server.shutdown()
 
@@ -193,8 +337,8 @@ class DefectDetectionService:
 
             product_config = self.algorithm_manager.get_product_config()
 
-            if self.manual_override_manager and self.manual_override_manager.has_override(detection_output.detection_id):
-                override = self.manual_override_manager.get_override(detection_output.detection_id)
+            if self.manual_override_manager and self.manual_override_manager.has_override(image_data.sequence_id):
+                override = self.manual_override_manager.get_override(image_data.sequence_id)
                 if override:
                     original_result = detection_output.result
                     detection_output.result = override.final_result
@@ -526,6 +670,7 @@ class DefectDetectionService:
                             self._send_json(400, {"error": "Manual override manager not available"})
                             return
 
+                        sequence_id = data.get("sequence_id")
                         detection_id = data.get("detection_id")
                         action = data.get("action")
                         operator = data.get("operator", "unknown")
@@ -534,8 +679,8 @@ class DefectDetectionService:
                         final_result_str = data.get("final_result")
                         details = data.get("details", {})
 
-                        if not detection_id or not action or not original_result_str or not final_result_str:
-                            self._send_json(400, {"error": "Missing required fields: detection_id, action, original_result, final_result"})
+                        if not sequence_id or not detection_id or not action or not original_result_str or not final_result_str:
+                            self._send_json(400, {"error": "Missing required fields: sequence_id, detection_id, action, original_result, final_result"})
                             return
 
                         try:
@@ -547,6 +692,7 @@ class DefectDetectionService:
                             return
 
                         record = service.manual_override_manager.apply_override(
+                            sequence_id=sequence_id,
                             detection_id=detection_id,
                             action=action_enum,
                             operator=operator,

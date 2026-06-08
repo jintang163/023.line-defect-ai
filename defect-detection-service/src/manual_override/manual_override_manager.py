@@ -10,18 +10,29 @@ from src.utils.schemas import (
 )
 from src.utils.logger import Logger
 
+try:
+    from src.plc.plc_connector import PLCConnector
+    PLC_AVAILABLE = True
+except ImportError:
+    PLC_AVAILABLE = False
+
 
 class ManualOverrideManager:
-    def __init__(self, max_history: int = 10000):
+    def __init__(self, max_history: int = 10000, plc_connector: Optional["PLCConnector"] = None):
         self._max_history = max_history
         self._history: deque[ManualOverrideRecord] = deque(maxlen=max_history)
-        self._detection_map: Dict[str, ManualOverrideRecord] = {}
+        self._sequence_map: Dict[str, ManualOverrideRecord] = {}
         self._callbacks: List[Callable[[ManualOverrideRecord], None]] = []
         self._lock = threading.Lock()
         self._logger = Logger()
+        self._plc_connector = plc_connector
+
+        if self._plc_connector:
+            self._logger.info("✅ PLC连接器已集成到人工干预管理器")
 
     def apply_override(
         self,
+        sequence_id: str,
         detection_id: str,
         action: ManualOverrideAction,
         operator: str,
@@ -30,9 +41,9 @@ class ManualOverrideManager:
         final_result: DetectionResult,
         details: Optional[Dict[str, Any]] = None,
     ) -> Optional[ManualOverrideRecord]:
-        if not detection_id or not operator or not reason:
+        if not sequence_id or not detection_id or not operator or not reason:
             self._logger.error(
-                "Invalid override parameters: detection_id, operator, and reason are required"
+                "Invalid override parameters: sequence_id, detection_id, operator, and reason are required"
             )
             return None
 
@@ -45,6 +56,7 @@ class ManualOverrideManager:
 
         with self._lock:
             record = ManualOverrideRecord.create(
+                sequence_id=sequence_id,
                 detection_id=detection_id,
                 action=action,
                 operator=operator,
@@ -55,13 +67,16 @@ class ManualOverrideManager:
             )
 
             self._history.append(record)
-            self._detection_map[detection_id] = record
+            self._sequence_map[sequence_id] = record
 
             self._logger.info(
-                f"Manual override applied: detection_id={detection_id}, "
+                f"🔧 人工干预已应用: sequence_id={sequence_id}, "
+                f"detection_id={detection_id}, "
                 f"action={action.value}, operator={operator}, "
                 f"original={original_result.value}, final={final_result.value}"
             )
+
+            self._trigger_plc_action(record)
 
             for callback in self._callbacks:
                 try:
@@ -71,9 +86,37 @@ class ManualOverrideManager:
 
             return record
 
-    def get_override(self, detection_id: str) -> Optional[ManualOverrideRecord]:
+    def _trigger_plc_action(self, record: ManualOverrideRecord):
+        if not self._plc_connector or not self._plc_connector.enabled:
+            return
+
+        try:
+            from src.utils.schemas import AlertAction
+
+            if record.action == ManualOverrideAction.FORCE_REJECT:
+                self._plc_connector.send_reject_command(
+                    detection_id=record.detection_id,
+                    defect_types=None,
+                    alert_action=AlertAction.REJECT
+                )
+                self._logger.info(f"📤 人工剔除PLC指令已发送: sequence_id={record.sequence_id}")
+
+            elif record.action == ManualOverrideAction.FORCE_PASS:
+                self._logger.info(f"✅ 人工放行: sequence_id={record.sequence_id}，不发送剔除信号")
+
+        except Exception as e:
+            self._logger.error(f"发送人工干预PLC指令失败: {e}", exc_info=True)
+
+    def get_override(self, sequence_id: str) -> Optional[ManualOverrideRecord]:
         with self._lock:
-            return self._detection_map.get(detection_id)
+            return self._sequence_map.get(sequence_id)
+
+    def get_override_by_detection_id(self, detection_id: str) -> Optional[ManualOverrideRecord]:
+        with self._lock:
+            for record in self._history:
+                if record.detection_id == detection_id:
+                    return record
+            return None
 
     def get_overrides(
         self,
@@ -157,12 +200,12 @@ class ManualOverrideManager:
                 self._callbacks.append(callback)
                 self._logger.info("Override callback registered")
 
-    def has_override(self, detection_id: str) -> bool:
+    def has_override(self, sequence_id: str) -> bool:
         with self._lock:
-            return detection_id in self._detection_map
+            return sequence_id in self._sequence_map
 
     def clear_history(self) -> None:
         with self._lock:
             self._history.clear()
-            self._detection_map.clear()
+            self._sequence_map.clear()
             self._logger.info("Manual override history cleared")
