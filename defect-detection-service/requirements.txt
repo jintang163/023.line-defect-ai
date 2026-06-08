@@ -1,0 +1,27 @@
+numpy>=1.24.0
+opencv-python>=4.8.0
+opencv-contrib-python>=4.8.0
+PyYAML>=6.0
+pika>=1.3.0
+kafka-python>=2.0.2
+coloredlogs>=15.0.1
+requests>=2.31.0
+
+onnxruntime>=1.16.0
+onnxruntime-gpu>=1.16.0; sys_platform != 'darwin'
+
+# Optional GPU acceleration
+# tensorrt>=8.6.0
+# pycuda>=2022.1
+
+# Development
+pytest>=7.4.0
+black>=23.0.0
+flake8>=6.0.0
+mypy>=1.5.0
+
+# Prometheus monitoring
+prometheus-client>=0.17.0
+
+# PLC communication (optional)
+# pymodbus>=3.5.0

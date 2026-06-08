@@ -1,0 +1,43 @@
+version: '3.8'
+
+services:
+  defect-detection:
+    build: .
+    container_name: line-defect-detection
+    restart: unless-stopped
+    ports:
+      - "8081:8081"
+      - "9091:9091"
+    volumes:
+      - ./config:/app/config
+      - ./models:/app/models
+      - ./logs:/app/logs
+      - ./data:/app/data
+    environment:
+      - CONFIG_PATH=/app/config/config.yaml
+      - DEFAULT_PRODUCT_ID=PROD-001
+    depends_on:
+      - rabbitmq
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  rabbitmq:
+    image: rabbitmq:3.12-management
+    container_name: line-rabbitmq
+    restart: unless-stopped
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    environment:
+      RABBITMQ_DEFAULT_USER: guest
+      RABBITMQ_DEFAULT_PASS: guest
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+
+volumes:
+  rabbitmq-data:

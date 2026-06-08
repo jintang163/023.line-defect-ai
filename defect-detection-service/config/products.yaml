@@ -1,0 +1,402 @@
+products:
+  - product_id: "PROD-001"
+    product_name: "金属外壳部件"
+    pixel_to_mm_ratio: 0.025
+    sensitivity: 0.8
+    allowed_error_mm: 0.1
+    allow_multiple_defects: false
+    max_defects_allowed: 0
+    inference_backend: "onnx_gpu"
+    gpu_device_id: 0
+    enable_tensorrt: true
+    inference_timeout_ms: 50
+
+    rois:
+      - name: "顶部检测区"
+        x: 100
+        y: 50
+        width: 1800
+        height: 400
+        enabled: true
+      - name: "侧面检测区"
+        x: 100
+        y: 500
+        width: 1800
+        height: 600
+        enabled: true
+      - name: "底部检测区"
+        x: 100
+        y: 1150
+        width: 1800
+        height: 400
+        enabled: true
+
+    algorithms:
+      - type: "edge_detection"
+        enabled: true
+        params:
+          low_threshold: 40
+          high_threshold: 120
+          aperture_size: 3
+          l2_gradient: false
+          blur_kernel: 5
+          min_contour_area_pixels: 200
+          max_contour_area_pixels: 50000
+          defect_type: "scratch"
+          morphological_kernel: 3
+        model_path: ""
+
+      - type: "gray_diff"
+        enabled: true
+        params:
+          reference_image_path: "./models/references/PROD-001_reference.jpg"
+          diff_threshold: 25
+          min_area_pixels: 100
+          max_area_pixels: 50000
+          defect_type: "dirt"
+          blur_kernel: 5
+          morph_kernel: 3
+          use_abs_diff: true
+          normalize: true
+          adaptive_threshold: false
+          register_images: true
+        model_path: ""
+
+      - type: "object_detection"
+        enabled: true
+        params:
+          input_size: [640, 640]
+          mean: [0.485, 0.456, 0.406]
+          std: [0.229, 0.224, 0.225]
+          normalize: true
+          conf_threshold: 0.6
+          nms_threshold: 0.45
+          format: "yolo"
+          anchors: [10,13, 16,30, 33,23, 30,61, 62,45, 59,119, 116,90, 156,198, 373,326]
+          strides: [8, 16, 32]
+          class_names: ["ok", "scratch", "dirt", "dent", "crack"]
+          defect_type_map:
+            1: "scratch"
+            2: "dirt"
+            3: "dent"
+            4: "crack"
+          enable_dynamic_batch: false
+          max_batch_size: 1
+        model_path: "./models/PROD-001_yolov8s.onnx"
+
+    defect_types:
+      - type: "scratch"
+        enabled: true
+        min_area_mm2: 0.05
+        max_area_mm2: 100.0
+        min_confidence: 0.7
+        severity: "major"
+        alert_action: "reject"
+
+      - type: "dirt"
+        enabled: true
+        min_area_mm2: 0.1
+        max_area_mm2: 50.0
+        min_confidence: 0.6
+        severity: "minor"
+        alert_action: "log"
+
+      - type: "dent"
+        enabled: true
+        min_area_mm2: 0.1
+        max_area_mm2: 100.0
+        min_confidence: 0.7
+        severity: "major"
+        alert_action: "reject"
+
+      - type: "crack"
+        enabled: true
+        min_area_mm2: 0.05
+        max_area_mm2: 500.0
+        min_confidence: 0.6
+        severity: "critical"
+        alert_action: "stop_line"
+
+      - type: "deformation"
+        enabled: true
+        min_area_mm2: 0.5
+        max_area_mm2: 1000.0
+        min_confidence: 0.7
+        severity: "critical"
+        alert_action: "stop_line"
+
+      - type: "missing"
+        enabled: true
+        min_area_mm2: 10.0
+        max_area_mm2: 10000.0
+        min_confidence: 0.8
+        severity: "critical"
+        alert_action: "stop_line"
+
+      - type: "stain"
+        enabled: true
+        min_area_mm2: 0.1
+        max_area_mm2: 50.0
+        min_confidence: 0.6
+        severity: "minor"
+        alert_action: "log"
+
+      - type: "bubble"
+        enabled: true
+        min_area_mm2: 0.05
+        max_area_mm2: 10.0
+        min_confidence: 0.6
+        severity: "minor"
+        alert_action: "warn"
+
+  - product_id: "PROD-002"
+    product_name: "塑料盖板"
+    pixel_to_mm_ratio: 0.02
+    sensitivity: 0.7
+    allowed_error_mm: 0.15
+    allow_multiple_defects: true
+    max_defects_allowed: 2
+    inference_backend: "onnx_cpu"
+    gpu_device_id: 0
+    enable_tensorrt: false
+    inference_timeout_ms: 100
+
+    rois:
+      - name: "全区域检测"
+        x: 50
+        y: 50
+        width: 1900
+        height: 1400
+        enabled: true
+
+    algorithms:
+      - type: "edge_detection"
+        enabled: true
+        params:
+          low_threshold: 30
+          high_threshold: 100
+          aperture_size: 3
+          l2_gradient: false
+          blur_kernel: 7
+          min_contour_area_pixels: 150
+          max_contour_area_pixels: 30000
+          defect_type: "scratch"
+          morphological_kernel: 3
+        model_path: ""
+
+      - type: "gray_diff"
+        enabled: true
+        params:
+          reference_image_path: "./models/references/PROD-002_reference.jpg"
+          diff_threshold: 30
+          min_area_pixels: 150
+          max_area_pixels: 30000
+          defect_type: "bubble"
+          blur_kernel: 7
+          morph_kernel: 5
+          use_abs_diff: true
+          normalize: true
+          adaptive_threshold: false
+          register_images: true
+        model_path: ""
+
+      - type: "classification"
+        enabled: true
+        params:
+          input_size: [224, 224]
+          mean: [0.485, 0.456, 0.406]
+          std: [0.229, 0.224, 0.225]
+          normalize: true
+          threshold: 0.5
+          output_name: "output"
+          ok_class_idx: 0
+          class_names: ["ok", "defect"]
+          defect_type_map:
+            1: "deformation"
+          enable_dynamic_batch: true
+          max_batch_size: 8
+        model_path: "./models/PROD-002_resnet18.onnx"
+
+      - type: "segmentation"
+        enabled: false
+        params:
+          input_size: [512, 512]
+          mean: [0.485, 0.456, 0.406]
+          std: [0.229, 0.224, 0.225]
+          normalize: true
+          threshold: 0.5
+          output_name: "output"
+          background_class: 0
+          min_area_pixels: 100
+          morph_kernel: 3
+          class_names: ["background", "scratch", "dirt", "stain"]
+          defect_type_map:
+            1: "scratch"
+            2: "dirt"
+            3: "stain"
+        model_path: "./models/PROD-002_unet.onnx"
+
+    defect_types:
+      - type: "scratch"
+        enabled: true
+        min_area_mm2: 0.1
+        max_area_mm2: 50.0
+        min_confidence: 0.7
+        severity: "major"
+        alert_action: "reject"
+
+      - type: "bubble"
+        enabled: true
+        min_area_mm2: 0.05
+        max_area_mm2: 10.0
+        min_confidence: 0.6
+        severity: "minor"
+        alert_action: "warn"
+
+      - type: "dirt"
+        enabled: true
+        min_area_mm2: 0.2
+        max_area_mm2: 30.0
+        min_confidence: 0.6
+        severity: "minor"
+        alert_action: "log"
+
+      - type: "deformation"
+        enabled: true
+        min_area_mm2: 1.0
+        max_area_mm2: 1000.0
+        min_confidence: 0.7
+        severity: "major"
+        alert_action: "reject"
+
+      - type: "stain"
+        enabled: true
+        min_area_mm2: 0.1
+        max_area_mm2: 50.0
+        min_confidence: 0.6
+        severity: "minor"
+        alert_action: "log"
+
+      - type: "missing"
+        enabled: true
+        min_area_mm2: 10.0
+        max_area_mm2: 10000.0
+        min_confidence: 0.8
+        severity: "critical"
+        alert_action: "stop_line"
+
+  - product_id: "PROD-003"
+    product_name: "玻璃面板"
+    pixel_to_mm_ratio: 0.015
+    sensitivity: 0.9
+    allowed_error_mm: 0.05
+    allow_multiple_defects: false
+    max_defects_allowed: 0
+    inference_backend: "onnx_gpu"
+    gpu_device_id: 0
+    enable_tensorrt: true
+    inference_timeout_ms: 30
+
+    rois:
+      - name: "显示区域"
+        x: 200
+        y: 200
+        width: 1600
+        height: 1000
+        enabled: true
+      - name: "边框区域"
+        x: 50
+        y: 50
+        width: 1900
+        height: 1300
+        enabled: true
+
+    algorithms:
+      - type: "template_matching"
+        enabled: true
+        params:
+          template_paths:
+            - "./models/templates/PROD-003_template_1.jpg"
+            - "./models/templates/PROD-003_template_2.jpg"
+          threshold: 0.85
+          match_method: "TM_CCOEFF_NORMED"
+          scale_range: [0.9, 1.1]
+          scale_steps: 3
+          defect_type: "missing"
+          detect_missing: true
+          detect_mismatch: true
+          blur_kernel: 3
+          use_gray: true
+          min_match_area_pixels: 1000
+        model_path: ""
+
+      - type: "segmentation"
+        enabled: true
+        params:
+          input_size: [1024, 1024]
+          mean: [0.5, 0.5, 0.5]
+          std: [0.5, 0.5, 0.5]
+          normalize: true
+          threshold: 0.4
+          output_name: "output"
+          background_class: 0
+          min_area_pixels: 50
+          morph_kernel: 3
+          class_names: ["background", "scratch", "crack", "bubble", "dirt"]
+          defect_type_map:
+            1: "scratch"
+            2: "crack"
+            3: "bubble"
+            4: "dirt"
+          enable_dynamic_batch: false
+          max_batch_size: 1
+        model_path: "./models/PROD-003_segformer.onnx"
+
+    defect_types:
+      - type: "scratch"
+        enabled: true
+        min_area_mm2: 0.02
+        max_area_mm2: 20.0
+        min_confidence: 0.6
+        severity: "major"
+        alert_action: "reject"
+
+      - type: "crack"
+        enabled: true
+        min_area_mm2: 0.01
+        max_area_mm2: 200.0
+        min_confidence: 0.5
+        severity: "critical"
+        alert_action: "stop_line"
+
+      - type: "bubble"
+        enabled: true
+        min_area_mm2: 0.02
+        max_area_mm2: 10.0
+        min_confidence: 0.6
+        severity: "minor"
+        alert_action: "reject"
+
+      - type: "dirt"
+        enabled: true
+        min_area_mm2: 0.1
+        max_area_mm2: 10.0
+        min_confidence: 0.7
+        severity: "minor"
+        alert_action: "log"
+
+      - type: "missing"
+        enabled: true
+        min_area_mm2: 5.0
+        max_area_mm2: 10000.0
+        min_confidence: 0.8
+        severity: "critical"
+        alert_action: "stop_line"
+
+      - type: "deformation"
+        enabled: true
+        min_area_mm2: 0.5
+        max_area_mm2: 1000.0
+        min_confidence: 0.7
+        severity: "major"
+        alert_action: "reject"

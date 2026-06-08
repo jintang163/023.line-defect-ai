@@ -1,0 +1,70 @@
+service:
+  name: "defect-detection-service"
+  version: "1.0.0"
+  log_level: "INFO"
+
+detection:
+  products_config: "./config/products.yaml"
+  models_dir: "./models"
+  default_backend: "onnx_cpu"
+  gpu_device_id: 0
+  enable_tensorrt: false
+  inference_timeout_ms: 100
+  enable_annotation: true
+  save_annotated_images: false
+  annotated_images_dir: "./data/annotated"
+
+messaging:
+  type: "rabbitmq"
+  host: "localhost"
+  port: 5672
+  username: "guest"
+  password: "guest"
+  exchange: "line-defect-exchange"
+  input_queue: "image-capture-queue"
+  input_routing_key: "image.captured"
+  output_queue: "defect-result-queue"
+  output_routing_key: "defect.result"
+
+  kafka:
+    input_topic: "image-capture-topic"
+    output_topic: "defect-result-topic"
+    group_id: "defect-detection-group"
+
+alert:
+  consecutive_ng_threshold: 5
+  webhook_url: ""
+  email_notification: false
+  smtp_server: ""
+  smtp_port: 587
+  smtp_username: ""
+  smtp_password: ""
+  notification_email: ""
+
+plc:
+  enable: false
+  type: "modbus"
+  host: "192.168.1.100"
+  port: 502
+  slave_id: 1
+  reject_coil_address: 100
+  stop_line_coil_address: 101
+
+monitoring:
+  enable_prometheus: true
+  metrics_port: 9091
+  health_check_interval_sec: 5
+  enable_tracing: false
+  jaeger_endpoint: ""
+
+api:
+  host: "0.0.0.0"
+  port: 8081
+  enable_cors: true
+  docs_enable: true
+  max_image_size_mb: 10
+
+metadata:
+  line_id: "line-001"
+  station_id: "station-001"
+  factory_id: "factory-001"
