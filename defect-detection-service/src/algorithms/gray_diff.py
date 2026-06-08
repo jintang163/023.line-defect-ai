@@ -39,17 +39,43 @@ class GrayDiffAlgorithm(BaseDetectionAlgorithm):
             }
 
             ref_path = self._params["reference_image_path"]
-            if ref_path and os.path.exists(ref_path):
-                self._load_reference_image(ref_path)
+
+            if not ref_path:
+                error_msg = "❌ 灰度差分初始化失败：未配置参考图像路径 (reference_image_path is empty)"
+                logger.error(error_msg)
+                self._is_initialized = False
+                return False
+
+            if not os.path.exists(ref_path):
+                error_msg = f"❌ 灰度差分初始化失败：参考图像不存在\n   路径: {ref_path}"
+                error_msg += f"\n   当前工作目录: {os.getcwd()}"
+                error_msg += f"\n   绝对路径: {os.path.abspath(ref_path)}"
+                logger.error(error_msg)
+                self._is_initialized = False
+                return False
+
+            load_success = self._load_reference_image(ref_path)
+            if not load_success:
+                error_msg = f"❌ 灰度差分初始化失败：无法读取参考图像\n   路径: {ref_path}\n   请确认图像格式是否正确（支持 jpg/png/bmp）"
+                logger.error(error_msg)
+                self._is_initialized = False
+                return False
 
             self._is_initialized = self._reference_image is not None
-            if not self._is_initialized:
-                logger.warning("Gray diff initialized without reference image")
 
-            logger.info(f"Gray diff algorithm initialized: {self._params}")
+            if self._is_initialized:
+                logger.info(f"✅ 灰度差分初始化成功")
+                logger.info(f"   参考图像: {ref_path}")
+                logger.info(f"   图像尺寸: {self._reference_image.shape[1]}x{self._reference_image.shape[0]}")
+                logger.info(f"   差分阈值: {self._params['diff_threshold']}")
+            else:
+                logger.error("❌ 灰度差分初始化失败：参考图像加载后为空")
+                return False
+
             return True
         except Exception as e:
-            logger.error(f"Failed to initialize gray diff: {e}")
+            error_msg = f"❌ 灰度差分初始化异常：{str(e)}"
+            logger.error(error_msg, exc_info=True)
             self._is_initialized = False
             return False
 

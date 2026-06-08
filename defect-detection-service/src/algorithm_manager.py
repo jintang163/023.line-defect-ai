@@ -4,6 +4,8 @@ import time
 import threading
 import os
 import yaml
+import concurrent.futures
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 
 from src.algorithms.base_algorithm import BaseDetectionAlgorithm
 from src.algorithms.edge_detection import EdgeDetectionAlgorithm
@@ -23,7 +25,7 @@ logger = Logger().logger
 
 
 class AlgorithmManager:
-    def __init__(self):
+    def __init__(self, enable_parallel: bool = True, max_workers: int = 4):
         self._traditional_algorithms: Dict[AlgorithmType, BaseDetectionAlgorithm] = {}
         self._dl_algorithms: Dict[AlgorithmType, BaseDeepLearningAlgorithm] = {}
         self._products: Dict[str, ProductConfig] = {}
@@ -31,6 +33,14 @@ class AlgorithmManager:
         self._initialized_algorithms: Dict[str, Any] = {}
         self._lock = threading.RLock()
         self._is_initialized = False
+
+        self._enable_parallel = enable_parallel
+        self._max_workers = max_workers
+        self._thread_pool: Optional[ThreadPoolExecutor] = None
+
+        if self._enable_parallel:
+            self._thread_pool = ThreadPoolExecutor(max_workers=self._max_workers)
+            logger.info(f"✅ 并行处理已启用，最大工作线程数: {max_workers}")
 
         self._register_algorithms()
 
@@ -239,37 +249,24 @@ class AlgorithmManager:
             if not rois:
                 rois = [None]
 
+            enabled_algos = []
             for algo_config in product_config.algorithms:
                 if not algo_config.enabled:
                     continue
-
                 algo_key = f"{product_config.product_id}_{algo_config.type.value}"
                 if algo_key not in self._initialized_algorithms:
                     logger.warning(f"Algorithm {algo_config.type.value} not initialized, skipping")
                     continue
+                enabled_algos.append((algo_config, algo_key))
 
-                algo = self._initialized_algorithms[algo_key]
-
-                for roi in rois:
-                    try:
-                        algo_start_time = time.time()
-                        defects, infer_result = algo.detect(
-                            image=image_data.image,
-                            product_config=product_config,
-                            roi=roi
-                        )
-
-                        algo_time = (time.time() - algo_start_time) * 1000
-                        algo_type_str = algo_config.type.value
-                        if roi and roi.name:
-                            algo_type_str += f"_{roi.name}"
-                        algorithm_times[algo_type_str] = algo_time
-
-                        if infer_result.success:
-                            all_defects.extend(defects)
-
-                    except Exception as e:
-                        logger.error(f"Error running algorithm {algo_config.type.value}: {e}", exc_info=True)
+            if self._enable_parallel and self._thread_pool and len(enabled_algos) > 0:
+                all_defects, algorithm_times = self._detect_parallel(
+                    image_data.image, product_config, enabled_algos, rois
+                )
+            else:
+                all_defects, algorithm_times = self._detect_sequential(
+                    image_data.image, product_config, enabled_algos, rois
+                )
 
             all_defects = self._deduplicate_defects(all_defects, product_config)
 
@@ -281,6 +278,103 @@ class AlgorithmManager:
             output.alert_action = self._determine_alert_action(all_defects, product_config)
 
             return output
+
+    def _detect_sequential(self, image: np.ndarray, product_config: ProductConfig,
+                           enabled_algos: List[Tuple[Any, str]], rois: List[Optional[ROI]]
+                           ) -> Tuple[List[Defect], Dict[str, float]]:
+        all_defects: List[Defect] = []
+        algorithm_times: Dict[str, float] = {}
+
+        for algo_config, algo_key in enabled_algos:
+            algo = self._initialized_algorithms[algo_key]
+
+            for roi in rois:
+                try:
+                    defects, algo_time = self._run_single_detection(
+                        algo, algo_config, image, product_config, roi
+                    )
+                    if defects is not None:
+                        all_defects.extend(defects)
+                        algo_type_str = algo_config.type.value
+                        if roi and roi.name:
+                            algo_type_str += f"_{roi.name}"
+                        algorithm_times[algo_type_str] = algo_time
+                except Exception as e:
+                    logger.error(f"Error running algorithm {algo_config.type.value}: {e}", exc_info=True)
+
+        return all_defects, algorithm_times
+
+    def _detect_parallel(self, image: np.ndarray, product_config: ProductConfig,
+                         enabled_algos: List[Tuple[Any, str]], rois: List[Optional[ROI]]
+                         ) -> Tuple[List[Defect], Dict[str, float]]:
+        all_defects: List[Defect] = []
+        algorithm_times: Dict[str, float] = {}
+
+        tasks = []
+        for algo_config, algo_key in enabled_algos:
+            algo = self._initialized_algorithms[algo_key]
+            for roi in rois:
+                tasks.append((algo, algo_config, roi))
+
+        logger.debug(f"🚀 并行执行 {len(tasks)} 个检测任务 (算法×ROI)")
+
+        futures = []
+        for algo, algo_config, roi in tasks:
+            future = self._thread_pool.submit(
+                self._run_single_detection,
+                algo, algo_config, image, product_config, roi
+            )
+            futures.append((future, algo_config, roi))
+
+        timeout_sec = product_config.inference_timeout_ms / 1000.0
+
+        for future, algo_config, roi in futures:
+            try:
+                defects, algo_time = future.result(timeout=timeout_sec)
+                if defects is not None:
+                    all_defects.extend(defects)
+                    algo_type_str = algo_config.type.value
+                    if roi and roi.name:
+                        algo_type_str += f"_{roi.name}"
+                    algorithm_times[algo_type_str] = algo_time
+            except FuturesTimeoutError:
+                algo_type_str = algo_config.type.value
+                if roi and roi.name:
+                    algo_type_str += f"_{roi.name}"
+                logger.error(f"⏰ 检测超时 [{algo_type_str}]: 超过 {product_config.inference_timeout_ms}ms")
+                future.cancel()
+            except Exception as e:
+                algo_type_str = algo_config.type.value
+                if roi and roi.name:
+                    algo_type_str += f"_{roi.name}"
+                logger.error(f"❌ 并行检测错误 [{algo_type_str}]: {e}", exc_info=True)
+
+        return all_defects, algorithm_times
+
+    def _run_single_detection(self, algo, algo_config, image: np.ndarray,
+                              product_config: ProductConfig, roi: Optional[ROI]
+                              ) -> Tuple[Optional[List[Defect]], float]:
+        algo_start_time = time.time()
+
+        try:
+            defects, infer_result = algo.detect(
+                image=image,
+                product_config=product_config,
+                roi=roi
+            )
+
+            algo_time = (time.time() - algo_start_time) * 1000
+
+            if infer_result.success:
+                return defects, algo_time
+            else:
+                logger.warning(f"算法 {algo_config.type.value} 检测失败: {infer_result.error_message}")
+                return None, algo_time
+
+        except Exception as e:
+            algo_time = (time.time() - algo_start_time) * 1000
+            logger.error(f"算法 {algo_config.type.value} 检测异常: {e}", exc_info=True)
+            return None, algo_time
 
     def _deduplicate_defects(self, defects: List[Defect], product_config: ProductConfig) -> List[Defect]:
         if len(defects) <= 1:
@@ -420,6 +514,15 @@ class AlgorithmManager:
                         logger.warning(f"Error during cleanup: {e}")
 
             self._initialized_algorithms.clear()
+
+            if self._thread_pool:
+                try:
+                    self._thread_pool.shutdown(wait=True, timeout=5)
+                    logger.info("线程池已关闭")
+                except Exception as e:
+                    logger.warning(f"关闭线程池异常: {e}")
+                self._thread_pool = None
+
             logger.info("All algorithms cleaned up")
 
     @property

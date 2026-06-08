@@ -31,6 +31,29 @@ messaging:
     output_topic: "defect-result-topic"
     group_id: "defect-detection-group"
 
+  image_fetch_timeout: 10
+  image_fetch_retries: 3
+  image_fetch_retry_delay: 1
+
+  process_all_cameras: true
+  camera_position_filter: []
+  camera_id_filter: []
+
+  auto_switch_product: true
+
+  enable_parallel_processing: true
+  max_parallel_workers: 4
+
+  image_storage:
+    type: "minio"
+    endpoint: "localhost:9000"
+    access_key: "minioadmin"
+    secret_key: "minioadmin"
+    bucket: "defect-images"
+    use_ssl: false
+    use_local_fallback: true
+    local_fallback_dir: "./data/storage"
+
 alert:
   consecutive_ng_threshold: 5
   webhook_url: ""

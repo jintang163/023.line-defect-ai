@@ -36,17 +36,34 @@ class TemplateMatchingAlgorithm(BaseDetectionAlgorithm):
                 "min_match_area_pixels": params.get("min_match_area_pixels", 500)
             }
 
+            template_paths = self._params["template_paths"]
+            if not template_paths:
+                error_msg = "❌ 模板匹配初始化失败：未配置任何模板路径 (template_paths is empty)"
+                logger.error(error_msg)
+                self._is_initialized = False
+                return False
+
             self._load_templates()
             self._is_initialized = len(self._templates) > 0
 
             if self._is_initialized:
-                logger.info(f"Template matching initialized with {len(self._templates)} templates")
+                logger.info(f"✅ 模板匹配初始化成功，加载 {len(self._templates)} 个模板")
+                for i, path in enumerate(self._template_paths):
+                    logger.info(f"   模板 [{i+1}]: {path}")
             else:
-                logger.warning("Template matching initialized but no templates loaded")
+                error_msg = f"❌ 模板匹配初始化失败：{len(template_paths)} 个模板全部加载失败"
+                error_msg += f"\n   尝试加载的模板路径："
+                for path in template_paths:
+                    exists = "✓" if os.path.exists(path) else "✗"
+                    error_msg += f"\n     {exists} {path}"
+                logger.error(error_msg)
+                self._is_initialized = False
+                return False
 
             return self._is_initialized
         except Exception as e:
-            logger.error(f"Failed to initialize template matching: {e}")
+            error_msg = f"❌ 模板匹配初始化异常：{str(e)}"
+            logger.error(error_msg, exc_info=True)
             self._is_initialized = False
             return False
 
@@ -57,7 +74,7 @@ class TemplateMatchingAlgorithm(BaseDetectionAlgorithm):
         template_paths = self._params["template_paths"]
         for path in template_paths:
             if not os.path.exists(path):
-                logger.warning(f"Template file not found: {path}")
+                logger.error(f"✗ 模板文件不存在: {path}")
                 continue
 
             try:

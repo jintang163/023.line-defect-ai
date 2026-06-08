@@ -35,7 +35,14 @@ class DefectDetectionService:
     def _init_components(self):
         logger.info("Initializing defect detection service components...")
 
-        self.algorithm_manager = AlgorithmManager()
+        msg_config = self.config_manager.get_messaging_config()
+        enable_parallel = msg_config.get("enable_parallel_processing", True)
+        max_workers = msg_config.get("max_parallel_workers", 4)
+
+        self.algorithm_manager = AlgorithmManager(
+            enable_parallel=enable_parallel,
+            max_workers=max_workers
+        )
 
         products_config_path = self.config_manager.get_products_config_path()
         if not self.algorithm_manager.load_products_config(products_config_path):
@@ -57,6 +64,7 @@ class DefectDetectionService:
 
     def _init_callbacks(self):
         self.message_consumer.set_callback(self._on_image_received)
+        self.message_consumer.set_product_switch_callback(self.switch_product)
 
     def start(self):
         if self._is_running:

@@ -33,12 +33,40 @@ class BaseDeepLearningAlgorithm(ABC):
             self._params = params
             self._model_path = model_path
 
+            if not model_path:
+                error_msg = f"❌ {self.name} 初始化失败：未配置模型路径 (model_path is empty)"
+                logger.error(error_msg)
+                self._is_initialized = False
+                return False
+
             if not os.path.exists(model_path):
-                logger.error(f"Model file not found: {model_path}")
+                error_msg = f"❌ {self.name} 初始化失败：模型文件不存在"
+                error_msg += f"\n   模型路径: {model_path}"
+                error_msg += f"\n   当前工作目录: {os.getcwd()}"
+                error_msg += f"\n   绝对路径: {os.path.abspath(model_path)}"
+                error_msg += f"\n   请确认模型文件是否已放置在正确位置！"
+                logger.error(error_msg)
+                self._is_initialized = False
+                return False
+
+            model_size_mb = os.path.getsize(model_path) / (1024 * 1024)
+            if model_size_mb < 0.1:
+                error_msg = f"❌ {self.name} 初始化失败：模型文件异常"
+                error_msg += f"\n   模型路径: {model_path}"
+                error_msg += f"\n   文件大小: {model_size_mb:.2f} MB (可能损坏)"
+                logger.error(error_msg)
+                self._is_initialized = False
                 return False
 
             from src.utils.schemas import InferenceBackend
-            backend_enum = InferenceBackend(backend)
+            try:
+                backend_enum = InferenceBackend(backend)
+            except ValueError:
+                error_msg = f"❌ {self.name} 初始化失败：不支持的推理后端 '{backend}'"
+                error_msg += f"\n   支持的后端: {[b.value for b in InferenceBackend]}"
+                logger.error(error_msg)
+                self._is_initialized = False
+                return False
 
             self._engine = ONNXInferenceEngine(
                 model_path=model_path,
@@ -50,16 +78,29 @@ class BaseDeepLearningAlgorithm(ABC):
             )
 
             if not self._engine.initialize():
-                logger.error("Failed to initialize inference engine")
+                error_msg = f"❌ {self.name} 初始化失败：推理引擎初始化失败"
+                error_msg += f"\n   模型路径: {model_path}"
+                error_msg += f"\n   推理后端: {backend}"
+                error_msg += f"\n   请检查 ONNX Runtime 是否正确安装，以及模型格式是否兼容"
+                logger.error(error_msg)
+                self._is_initialized = False
                 return False
 
             self._setup_class_mappings()
             self._is_initialized = True
-            logger.info(f"{self.name} initialized with model: {model_path}")
+
+            logger.info(f"✅ {self.name} 初始化成功")
+            logger.info(f"   模型路径: {model_path}")
+            logger.info(f"   模型大小: {model_size_mb:.2f} MB")
+            logger.info(f"   推理后端: {backend}")
+            logger.info(f"   类别数量: {len(self._class_names)}")
             return True
 
         except Exception as e:
-            logger.error(f"Failed to initialize {self.name}: {e}", exc_info=True)
+            error_msg = f"❌ {self.name} 初始化异常：{str(e)}"
+            error_msg += f"\n   模型路径: {model_path}"
+            error_msg += f"\n   请检查模型文件是否损坏，以及依赖库版本是否兼容"
+            logger.error(error_msg, exc_info=True)
             self._is_initialized = False
             return False
 
