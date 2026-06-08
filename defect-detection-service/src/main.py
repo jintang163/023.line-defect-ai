@@ -128,11 +128,6 @@ class DefectDetectionService:
             if production_config.get("enable", True):
                 self.production_tracker = ProductionTracker(production_config)
 
-                if self.plc_connector and self.plc_connector.enabled:
-                    def on_emergency_stop(count, reason):
-                        self.plc_connector.send_stop_line_command("", reason)
-                    self.production_tracker.register_emergency_stop_callback(on_emergency_stop)
-
                 self._init_yield_persistence(production_config)
 
                 if self._yield_db_enabled or self._yield_api_enabled:
@@ -332,6 +327,17 @@ class DefectDetectionService:
     def _on_image_received(self, image_data: ImageData):
         try:
             logger.debug(f"Processing image: {image_data.image_id} from {image_data.camera_id}")
+
+            if self.alert_manager.stop_line_active:
+                logger.warning(f"🛑 生产线已停机，跳过检测: {image_data.image_id}")
+                if self.action_logger and self.action_logger.enabled:
+                    self.action_logger.log_system_event(
+                        event=f"生产线停机中，检测已跳过: {image_data.image_id}",
+                        level="warning",
+                        source="main",
+                        details={"image_id": image_data.image_id, "sequence_id": image_data.sequence_id}
+                    )
+                return
 
             detection_output = self.algorithm_manager.detect(image_data)
 

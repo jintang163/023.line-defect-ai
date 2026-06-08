@@ -219,23 +219,45 @@ class ActionLogger:
 
     def _write_to_influxdb(self, log_entry: ActionLogEntry):
         try:
+            fields = {
+                "message": log_entry.message,
+                "detection_id": log_entry.detection_id,
+            }
+
+            for k, v in log_entry.details.items():
+                if isinstance(v, (int, float)):
+                    fields[k] = v
+                elif isinstance(v, bool):
+                    fields[k] = v
+                elif isinstance(v, str):
+                    fields[k] = v
+                elif v is None:
+                    continue
+                else:
+                    fields[k] = str(v)
+
+            tags = {
+                "log_type": log_entry.log_type.value,
+                "level": log_entry.level,
+                "source": log_entry.source,
+            }
+
+            if log_entry.product_id:
+                tags["product_id"] = log_entry.product_id
+
+            if log_entry.detection_id:
+                tags["detection_id"] = log_entry.detection_id
+                fields.pop("detection_id", None)
+
             json_body = [
                 {
                     "measurement": "action_logs",
-                    "tags": {
-                        "log_type": log_entry.log_type.value,
-                        "level": log_entry.level,
-                        "source": log_entry.source,
-                        "product_id": log_entry.product_id,
-                    },
+                    "tags": tags,
                     "time": int(log_entry.timestamp * 1e9),
-                    "fields": {
-                        "message": log_entry.message,
-                        "detection_id": log_entry.detection_id,
-                        **{k: str(v) for k, v in log_entry.details.items() if isinstance(v, (str, int, float, bool))}
-                    }
+                    "fields": fields
                 }
             ]
+
             self._influxdb_client.write_points(json_body)
             self._stats["influxdb_writes"] += 1
         except Exception as e:

@@ -16,7 +16,6 @@ class ProductionTracker:
     def __init__(self, config: Dict[str, Any]):
         self._config = config
         self._snapshot_interval_count = config.get("snapshot_interval_count", 1000)
-        self._consecutive_ng_threshold = config.get("consecutive_ng_threshold", 10)
         self._max_snapshots_per_product = config.get("max_snapshots_per_product", 1000)
 
         self._stats_lock = threading.RLock()
@@ -27,10 +26,9 @@ class ProductionTracker:
         self._period_start_times: Dict[str, float] = {}
 
         self._snapshot_callbacks: List[Callable[[YieldSnapshot], None]] = []
-        self._emergency_stop_callbacks: List[Callable[[int, str], None]] = []
 
         logger.info(f"ProductionTracker 已初始化，快照间隔: {self._snapshot_interval_count} 件")
-        logger.info(f"连续NG急停阈值: {self._consecutive_ng_threshold} 件")
+        logger.info("连续NG急停保护由 AlertManager 统一处理")
 
     def _get_or_create_stats(self, product_id: str) -> ProductionStats:
         if product_id not in self._product_stats:
@@ -76,18 +74,6 @@ class ProductionTracker:
 
         return snapshot
 
-    def _trigger_emergency_stop(self, consecutive_ng: int, product_id: str):
-        logger.warning(
-            f"⚠️  触发产线急停 - 产品: {product_id}, 连续NG: {consecutive_ng} 件, "
-            f"阈值: {self._consecutive_ng_threshold}"
-        )
-
-        for callback in self._emergency_stop_callbacks:
-            try:
-                callback(consecutive_ng, product_id)
-            except Exception as e:
-                logger.error(f"急停回调执行失败: {e}", exc_info=True)
-
     def _notify_snapshot_callbacks(self, snapshot: YieldSnapshot):
         for callback in self._snapshot_callbacks:
             try:
@@ -118,10 +104,6 @@ class ProductionTracker:
 
                 if stats.consecutive_ng_count > stats.max_consecutive_ng:
                     stats.max_consecutive_ng = stats.consecutive_ng_count
-
-                if stats.consecutive_ng_count >= self._consecutive_ng_threshold:
-                    is_emergency_stop = True
-                    self._trigger_emergency_stop(stats.consecutive_ng_count, product_id)
 
             self._update_defect_distribution(stats, detection_output.defects)
 
@@ -199,11 +181,6 @@ class ProductionTracker:
             self._snapshot_callbacks.append(callback)
             logger.info("已注册快照上传回调")
 
-    def register_emergency_stop_callback(self, callback: Callable[[int, str], None]):
-        if callback not in self._emergency_stop_callbacks:
-            self._emergency_stop_callbacks.append(callback)
-            logger.info("已注册产线急停回调")
-
     def get_defect_distribution(
         self,
         product_id: Optional[str] = None
@@ -222,7 +199,3 @@ class ProductionTracker:
     @property
     def snapshot_interval_count(self) -> int:
         return self._snapshot_interval_count
-
-    @property
-    def consecutive_ng_threshold(self) -> int:
-        return self._consecutive_ng_threshold
