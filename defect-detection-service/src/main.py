@@ -13,12 +13,39 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src.config.settings import ConfigManager
 from src.utils.logger import Logger
-from src.utils.schemas import ImageData, DetectionOutput, ProductConfig, AlgorithmType
+from src.utils.schemas import (
+    ImageData, DetectionOutput, ProductConfig, AlgorithmType,
+    ManualOverrideAction, DetectionResult
+)
 from src.algorithm_manager import AlgorithmManager
 from src.result_annotator import ResultAnnotator
 from src.alert_manager import AlertManager
 from src.messaging.message_consumer import MessageConsumer
 from src.messaging.result_producer import ResultProducer
+
+try:
+    from src.plc.plc_connector import PLCConnector
+    PLC_AVAILABLE = True
+except ImportError:
+    PLC_AVAILABLE = False
+
+try:
+    from src.action_logger.action_logger import ActionLogger
+    ACTION_LOGGER_AVAILABLE = True
+except ImportError:
+    ACTION_LOGGER_AVAILABLE = False
+
+try:
+    from src.production.production_tracker import ProductionTracker
+    PRODUCTION_TRACKER_AVAILABLE = True
+except ImportError:
+    PRODUCTION_TRACKER_AVAILABLE = False
+
+try:
+    from src.manual_override.manual_override_manager import ManualOverrideManager
+    MANUAL_OVERRIDE_AVAILABLE = True
+except ImportError:
+    MANUAL_OVERRIDE_AVAILABLE = False
 
 logger = Logger("defect-detection-service", "INFO", "./logs/defect-detection.log").logger
 
@@ -49,14 +76,62 @@ class DefectDetectionService:
             logger.warning("Failed to load products configuration")
 
         self.result_annotator = ResultAnnotator()
-        self.alert_manager = AlertManager(
-            max_history=1000
-        )
+
+        self.action_logger = None
+        if ACTION_LOGGER_AVAILABLE:
+            action_log_config = self.config_manager.get_action_log_config()
+            if action_log_config.get("enable", True):
+                self.action_logger = ActionLogger(action_log_config)
+
+        self.plc_connector = None
+        if PLC_AVAILABLE:
+            plc_config = self.config_manager.get_plc_config()
+            if plc_config.get("enable", False):
+                self.plc_connector = PLCConnector(plc_config)
+
+                if self.action_logger and self.action_logger.enabled:
+                    def on_plc_command_result(command, result):
+                        self.action_logger.log_plc_command(command, result)
+                    self.plc_connector.register_result_callback(on_plc_command_result)
 
         consecutive_threshold = self.config_manager.get_consecutive_ng_threshold()
-        self.alert_manager.set_consecutive_ng_threshold(consecutive_threshold)
+        auto_stop_line = self.config_manager.get_auto_stop_line()
 
-        msg_config = self.config_manager.get_messaging_config()
+        self.alert_manager = AlertManager(
+            max_history=1000,
+            plc_connector=self.plc_connector,
+            action_logger=self.action_logger,
+            consecutive_ng_threshold=consecutive_threshold,
+            auto_stop_line=auto_stop_line
+        )
+
+        self.production_tracker = None
+        if PRODUCTION_TRACKER_AVAILABLE:
+            production_config = self.config_manager.get_production_config()
+            if production_config.get("enable", True):
+                self.production_tracker = ProductionTracker(production_config)
+
+                if self.plc_connector and self.plc_connector.enabled:
+                    def on_emergency_stop(count, reason):
+                        self.plc_connector.send_stop_line_command("", reason)
+                    self.production_tracker.register_emergency_stop_callback(on_emergency_stop)
+
+                if self.action_logger and self.action_logger.enabled:
+                    def on_snapshot_upload(snapshot):
+                        pass
+                    self.production_tracker.register_snapshot_callback(on_snapshot_upload)
+
+        self.manual_override_manager = None
+        if MANUAL_OVERRIDE_AVAILABLE:
+            override_config = self.config_manager.get_manual_override_config()
+            max_history = override_config.get("max_history", 10000)
+            self.manual_override_manager = ManualOverrideManager(max_history=max_history)
+
+            if self.action_logger and self.action_logger.enabled:
+                def on_manual_override(record):
+                    self.action_logger.log_manual_override(record)
+                self.manual_override_manager.register_override_callback(on_manual_override)
+
         self.message_consumer = MessageConsumer(msg_config)
         self.result_producer = ResultProducer(msg_config)
 
@@ -96,6 +171,14 @@ class DefectDetectionService:
         self.result_producer.disconnect()
         self.algorithm_manager.cleanup()
 
+        if self.plc_connector:
+            self.plc_connector.disconnect()
+            logger.info("PLC connector stopped")
+
+        if self.action_logger:
+            self.action_logger.stop()
+            logger.info("Action logger stopped")
+
         if hasattr(self, '_http_server'):
             self._http_server.shutdown()
 
@@ -109,6 +192,16 @@ class DefectDetectionService:
             detection_output = self.algorithm_manager.detect(image_data)
 
             product_config = self.algorithm_manager.get_product_config()
+
+            if self.manual_override_manager and self.manual_override_manager.has_override(detection_output.detection_id):
+                override = self.manual_override_manager.get_override(detection_output.detection_id)
+                if override:
+                    original_result = detection_output.result
+                    detection_output.result = override.final_result
+                    detection_output.metadata["manual_override"] = override.to_dict()
+                    logger.info(f"🔧 人工干预: {original_result.value} → {override.final_result.value} | "
+                               f"操作员: {override.operator} | 原因: {override.reason}")
+
             if product_config:
                 alerts = self.alert_manager.process_detection_result(
                     detection_output, product_config
@@ -116,12 +209,23 @@ class DefectDetectionService:
                 for alert in alerts:
                     logger.info(f"Alert generated: {alert.level} - {alert.message}")
 
+            if self.production_tracker and product_config:
+                is_emergency_stop, snapshot = self.production_tracker.process_result(
+                    detection_output, product_config
+                )
+                if snapshot:
+                    logger.info(f"📊 良率快照生成: {snapshot.yield_rate:.2f}% | "
+                               f"OK: {snapshot.ok_count}/{snapshot.total_count}")
+
             annotated = self.result_annotator.annotate(
                 image_data.image,
                 detection_output.defects,
                 product_config
             )
             detection_output.annotated_image = annotated
+
+            if self.action_logger and self.action_logger.enabled:
+                self.action_logger.log_detection_result(detection_output)
 
             self.result_producer.send_result(detection_output, annotated)
 
@@ -139,6 +243,18 @@ class DefectDetectionService:
         success = self.algorithm_manager.set_current_product(product_id)
         if success:
             logger.info(f"Switched to product: {product_id}")
+
+            if self.production_tracker:
+                self.production_tracker.reset_stats(product_id)
+                logger.info(f"生产统计已重置为产品: {product_id}")
+
+            if self.action_logger and self.action_logger.enabled:
+                self.action_logger.log_system_event(
+                    event=f"产品切换: {product_id}",
+                    level="info",
+                    source="main",
+                    details={"product_id": product_id}
+                )
         else:
             logger.error(f"Failed to switch to product: {product_id}")
         return success
@@ -226,6 +342,113 @@ class DefectDetectionService:
                         service.config_manager.reload()
                         self._send_json(200, {"status": "reloaded"})
 
+                    elif path == "/api/plc/status":
+                        plc_status = {
+                            "enabled": service.plc_connector.enabled if service.plc_connector else False,
+                            "connected": service.plc_connector.is_connected() if service.plc_connector else False,
+                            "stats": service.plc_connector.get_stats() if service.plc_connector else {}
+                        }
+                        self._send_json(200, plc_status)
+
+                    elif path == "/api/plc/connect":
+                        if service.plc_connector:
+                            success = service.plc_connector.connect()
+                            self._send_json(200, {"success": success})
+                        else:
+                            self._send_json(400, {"error": "PLC connector not available"})
+
+                    elif path == "/api/plc/disconnect":
+                        if service.plc_connector:
+                            service.plc_connector.disconnect()
+                            self._send_json(200, {"status": "disconnected"})
+                        else:
+                            self._send_json(400, {"error": "PLC connector not available"})
+
+                    elif path == "/api/production/stats":
+                        if service.production_tracker:
+                            product_id = params.get("product_id", [None])[0]
+                            stats = service.production_tracker.get_stats(product_id)
+                            self._send_json(200, stats)
+                        else:
+                            self._send_json(400, {"error": "Production tracker not available"})
+
+                    elif path == "/api/production/snapshots":
+                        if service.production_tracker:
+                            product_id = params.get("product_id", [None])[0]
+                            limit = int(params.get("limit", [100])[0])
+                            snapshots = service.production_tracker.get_snapshots(product_id, limit)
+                            self._send_json(200, {"snapshots": [s.to_dict() for s in snapshots]})
+                        else:
+                            self._send_json(400, {"error": "Production tracker not available"})
+
+                    elif path == "/api/production/defect-distribution":
+                        if service.production_tracker:
+                            product_id = params.get("product_id", [None])[0]
+                            dist = service.production_tracker.get_defect_distribution(product_id)
+                            self._send_json(200, {"distribution": dist})
+                        else:
+                            self._send_json(400, {"error": "Production tracker not available"})
+
+                    elif path == "/api/production/reset":
+                        if service.production_tracker:
+                            product_id = params.get("product_id", [None])[0]
+                            service.production_tracker.reset_stats(product_id)
+                            self._send_json(200, {"status": "reset"})
+                        else:
+                            self._send_json(400, {"error": "Production tracker not available"})
+
+                    elif path == "/api/manual-override/history":
+                        if service.manual_override_manager:
+                            operator = params.get("operator", [None])[0]
+                            action = params.get("action", [None])[0]
+                            limit = int(params.get("limit", [100])[0])
+                            action_enum = ManualOverrideAction(action) if action else None
+                            records = service.manual_override_manager.get_overrides(operator, action_enum, limit)
+                            self._send_json(200, {"records": [r.to_dict() for r in records]})
+                        else:
+                            self._send_json(400, {"error": "Manual override manager not available"})
+
+                    elif path == "/api/manual-override/stats":
+                        if service.manual_override_manager:
+                            stats = service.manual_override_manager.get_stats()
+                            self._send_json(200, stats)
+                        else:
+                            self._send_json(400, {"error": "Manual override manager not available"})
+
+                    elif path == "/api/action-logs":
+                        if service.action_logger:
+                            log_type = params.get("log_type", [None])[0]
+                            product_id = params.get("product_id", [None])[0]
+                            detection_id = params.get("detection_id", [None])[0]
+                            level = params.get("level", [None])[0]
+                            limit = int(params.get("limit", [100])[0])
+                            from src.utils.schemas import ActionLogType
+                            log_type_enum = ActionLogType(log_type) if log_type else None
+                            logs = service.action_logger.get_logs(log_type_enum, product_id, detection_id, level, limit)
+                            self._send_json(200, {"logs": [l.to_dict() for l in logs]})
+                        else:
+                            self._send_json(400, {"error": "Action logger not available"})
+
+                    elif path == "/api/action-logs/stats":
+                        if service.action_logger:
+                            stats = service.action_logger.get_stats()
+                            self._send_json(200, stats)
+                        else:
+                            self._send_json(400, {"error": "Action logger not available"})
+
+                    elif path == "/api/action-logs/query":
+                        if service.action_logger:
+                            log_type = params.get("log_type", [None])[0]
+                            product_id = params.get("product_id", [None])[0]
+                            detection_id = params.get("detection_id", [None])[0]
+                            limit = int(params.get("limit", [100])[0])
+                            logs = service.action_logger.query_logs_from_db(
+                                log_type, product_id, detection_id, limit
+                            )
+                            self._send_json(200, {"logs": logs})
+                        else:
+                            self._send_json(400, {"error": "Action logger not available"})
+
                     else:
                         self._send_json(404, {"error": "Not found"})
 
@@ -298,6 +521,99 @@ class DefectDetectionService:
                         success = service.message_consumer.reconnect() and service.result_producer.reconnect()
                         self._send_json(200, {"success": success})
 
+                    elif path == "/api/manual-override/apply":
+                        if not service.manual_override_manager:
+                            self._send_json(400, {"error": "Manual override manager not available"})
+                            return
+
+                        detection_id = data.get("detection_id")
+                        action = data.get("action")
+                        operator = data.get("operator", "unknown")
+                        reason = data.get("reason", "")
+                        original_result_str = data.get("original_result")
+                        final_result_str = data.get("final_result")
+                        details = data.get("details", {})
+
+                        if not detection_id or not action or not original_result_str or not final_result_str:
+                            self._send_json(400, {"error": "Missing required fields: detection_id, action, original_result, final_result"})
+                            return
+
+                        try:
+                            action_enum = ManualOverrideAction(action)
+                            original_result = DetectionResult(original_result_str)
+                            final_result = DetectionResult(final_result_str)
+                        except Exception as e:
+                            self._send_json(400, {"error": f"Invalid enum value: {e}"})
+                            return
+
+                        record = service.manual_override_manager.apply_override(
+                            detection_id=detection_id,
+                            action=action_enum,
+                            operator=operator,
+                            reason=reason,
+                            original_result=original_result,
+                            final_result=final_result,
+                            details=details
+                        )
+
+                        if record:
+                            self._send_json(200, {"success": True, "record": record.to_dict()})
+                        else:
+                            self._send_json(500, {"error": "Failed to apply override"})
+
+                    elif path == "/api/alerts/reset-stop-line":
+                        operator = data.get("operator", "system")
+                        reason = data.get("reason", "手动重置")
+                        service.alert_manager.reset_stop_line(operator=operator, reason=reason)
+                        self._send_json(200, {"status": "reset", "operator": operator, "reason": reason})
+
+                    elif path == "/api/plc/command/reject":
+                        if not service.plc_connector or not service.plc_connector.enabled:
+                            self._send_json(400, {"error": "PLC connector not available or disabled"})
+                            return
+
+                        detection_id = data.get("detection_id", "")
+                        command_id = service.plc_connector.send_reject_command(
+                            detection_id=detection_id,
+                            defect_types=None,
+                            alert_action=AlertAction.REJECT
+                        )
+                        self._send_json(200, {"command_id": command_id})
+
+                    elif path == "/api/plc/command/stop-line":
+                        if not service.plc_connector or not service.plc_connector.enabled:
+                            self._send_json(400, {"error": "PLC connector not available or disabled"})
+                            return
+
+                        detection_id = data.get("detection_id", "")
+                        reason = data.get("reason", "手动触发")
+                        command_id = service.plc_connector.send_stop_line_command(
+                            detection_id=detection_id,
+                            reason=reason
+                        )
+                        self._send_json(200, {"command_id": command_id})
+
+                    elif path == "/api/plc/command/reset":
+                        if not service.plc_connector or not service.plc_connector.enabled:
+                            self._send_json(400, {"error": "PLC connector not available or disabled"})
+                            return
+
+                        command_id = service.plc_connector.send_reset_command()
+                        self._send_json(200, {"command_id": command_id})
+
+                    elif path == "/api/plc/command/alarm":
+                        if not service.plc_connector or not service.plc_connector.enabled:
+                            self._send_json(400, {"error": "PLC connector not available or disabled"})
+                            return
+
+                        detection_id = data.get("detection_id", "")
+                        alarm_type = data.get("alarm_type", "manual")
+                        command_id = service.plc_connector.send_alarm_command(
+                            detection_id=detection_id,
+                            alarm_type=alarm_type
+                        )
+                        self._send_json(200, {"command_id": command_id})
+
                     else:
                         self._send_json(404, {"error": "Not found"})
 
@@ -333,15 +649,43 @@ class DefectDetectionService:
             "producer_connected": self.result_producer.is_connected(),
             "stop_line_active": self.alert_manager.stop_line_active,
             "consecutive_ng_count": self.alert_manager.consecutive_ng_count,
-            "products_count": len(self.algorithm_manager.get_all_products())
+            "products_count": len(self.algorithm_manager.get_all_products()),
+            "plc": {
+                "enabled": self.plc_connector.enabled if self.plc_connector else False,
+                "connected": self.plc_connector.is_connected() if self.plc_connector else False
+            },
+            "action_logger": {
+                "enabled": self.action_logger.enabled if self.action_logger else False
+            },
+            "production_tracker": {
+                "enabled": self.production_tracker is not None
+            },
+            "manual_override": {
+                "enabled": self.manual_override_manager is not None
+            }
         }
 
     def _get_stats(self) -> Dict[str, Any]:
-        return {
+        stats = {
             "consumer": self.message_consumer.get_stats(),
             "producer": self.result_producer.get_stats(),
             "alerts": self.alert_manager.get_stats()
         }
+
+        if self.plc_connector:
+            stats["plc"] = self.plc_connector.get_stats()
+
+        if self.action_logger:
+            stats["action_logger"] = self.action_logger.get_stats()
+
+        if self.production_tracker:
+            product_id = self.algorithm_manager.current_product_id
+            stats["production"] = self.production_tracker.get_stats(product_id)
+
+        if self.manual_override_manager:
+            stats["manual_override"] = self.manual_override_manager.get_stats()
+
+        return stats
 
     def wait(self):
         try:

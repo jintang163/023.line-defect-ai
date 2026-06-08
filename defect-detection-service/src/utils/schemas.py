@@ -397,3 +397,294 @@ class AlertMessage:
             defect_id=defect_id,
             details=details or {}
         )
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "alert_id": self.alert_id,
+            "level": self.level,
+            "category": self.category,
+            "message": self.message,
+            "source": self.source,
+            "action": self.action.value,
+            "timestamp": self.timestamp,
+            "detection_id": self.detection_id,
+            "defect_id": self.defect_id,
+            "details": self.details
+        }
+
+
+class PLCProtocol(Enum):
+    MODBUS_TCP = "modbus_tcp"
+    OPC_UA = "opc_ua"
+
+
+class PLCCommandType(Enum):
+    REJECT = "reject"
+    STOP_LINE = "stop_line"
+    ALARM = "alarm"
+    RESET = "reset"
+    HEARTBEAT = "heartbeat"
+
+
+@dataclass
+class PLCCommand:
+    command_id: str
+    command_type: PLCCommandType
+    timestamp: float
+    detection_id: str = ""
+    defect_codes: List[int] = field(default_factory=list)
+    coil_address: int = 0
+    value: bool = False
+    details: Dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def create(cls, command_type: PLCCommandType, detection_id: str = "",
+               defect_codes: Optional[List[int]] = None,
+               coil_address: int = 0, value: bool = False,
+               details: Optional[Dict[str, Any]] = None) -> "PLCCommand":
+        return cls(
+            command_id=str(uuid.uuid4()),
+            command_type=command_type,
+            timestamp=time.time(),
+            detection_id=detection_id,
+            defect_codes=defect_codes or [],
+            coil_address=coil_address,
+            value=value,
+            details=details or {}
+        )
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "command_id": self.command_id,
+            "command_type": self.command_type.value,
+            "timestamp": self.timestamp,
+            "detection_id": self.detection_id,
+            "defect_codes": self.defect_codes,
+            "coil_address": self.coil_address,
+            "value": self.value,
+            "details": self.details
+        }
+
+
+@dataclass
+class PLCCommandResult:
+    command_id: str
+    success: bool
+    timestamp: float
+    response_time_ms: float = 0.0
+    error_message: str = ""
+    details: Dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "command_id": self.command_id,
+            "success": self.success,
+            "timestamp": self.timestamp,
+            "response_time_ms": self.response_time_ms,
+            "error_message": self.error_message,
+            "details": self.details
+        }
+
+
+@dataclass
+class YieldSnapshot:
+    snapshot_id: str
+    product_id: str
+    timestamp: float
+    total_count: int
+    ok_count: int
+    ng_count: int
+    yield_rate: float
+    period_start: float
+    period_end: float
+    defect_distribution: Dict[str, int] = field(default_factory=dict)
+    details: Dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def create(cls, product_id: str, total_count: int, ok_count: int, ng_count: int,
+               period_start: float, period_end: float,
+               defect_distribution: Optional[Dict[str, int]] = None,
+               details: Optional[Dict[str, Any]] = None) -> "YieldSnapshot":
+        yield_rate = (ok_count / total_count * 100) if total_count > 0 else 0.0
+        return cls(
+            snapshot_id=str(uuid.uuid4()),
+            product_id=product_id,
+            timestamp=time.time(),
+            total_count=total_count,
+            ok_count=ok_count,
+            ng_count=ng_count,
+            yield_rate=yield_rate,
+            period_start=period_start,
+            period_end=period_end,
+            defect_distribution=defect_distribution or {},
+            details=details or {}
+        )
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "snapshot_id": self.snapshot_id,
+            "product_id": self.product_id,
+            "timestamp": self.timestamp,
+            "total_count": self.total_count,
+            "ok_count": self.ok_count,
+            "ng_count": self.ng_count,
+            "yield_rate": self.yield_rate,
+            "period_start": self.period_start,
+            "period_end": self.period_end,
+            "defect_distribution": self.defect_distribution,
+            "details": self.details
+        }
+
+
+@dataclass
+class ProductionStats:
+    product_id: str
+    total_count: int = 0
+    ok_count: int = 0
+    ng_count: int = 0
+    consecutive_ng_count: int = 0
+    max_consecutive_ng: int = 0
+    current_batch_start: float = 0.0
+    last_snapshot_time: float = 0.0
+    defect_distribution: Dict[str, int] = field(default_factory=dict)
+
+    @property
+    def yield_rate(self) -> float:
+        return (self.ok_count / self.total_count * 100) if self.total_count > 0 else 0.0
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "product_id": self.product_id,
+            "total_count": self.total_count,
+            "ok_count": self.ok_count,
+            "ng_count": self.ng_count,
+            "consecutive_ng_count": self.consecutive_ng_count,
+            "max_consecutive_ng": self.max_consecutive_ng,
+            "yield_rate": self.yield_rate,
+            "current_batch_start": self.current_batch_start,
+            "last_snapshot_time": self.last_snapshot_time,
+            "defect_distribution": self.defect_distribution
+        }
+
+
+class ManualOverrideAction(Enum):
+    FORCE_PASS = "force_pass"
+    FORCE_REJECT = "force_reject"
+    NORMAL = "normal"
+
+
+@dataclass
+class ManualOverrideRecord:
+    override_id: str
+    detection_id: str
+    action: ManualOverrideAction
+    operator: str
+    reason: str
+    timestamp: float
+    original_result: DetectionResult
+    final_result: DetectionResult
+    details: Dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def create(cls, detection_id: str, action: ManualOverrideAction,
+               operator: str, reason: str,
+               original_result: DetectionResult, final_result: DetectionResult,
+               details: Optional[Dict[str, Any]] = None) -> "ManualOverrideRecord":
+        return cls(
+            override_id=str(uuid.uuid4()),
+            detection_id=detection_id,
+            action=action,
+            operator=operator,
+            reason=reason,
+            timestamp=time.time(),
+            original_result=original_result,
+            final_result=final_result,
+            details=details or {}
+        )
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "override_id": self.override_id,
+            "detection_id": self.detection_id,
+            "action": self.action.value,
+            "operator": self.operator,
+            "reason": self.reason,
+            "timestamp": self.timestamp,
+            "original_result": self.original_result.value,
+            "final_result": self.final_result.value,
+            "details": self.details
+        }
+
+
+class ActionLogType(Enum):
+    DETECTION_RESULT = "detection_result"
+    PLC_COMMAND = "plc_command"
+    ALERT = "alert"
+    MANUAL_OVERRIDE = "manual_override"
+    SYSTEM = "system"
+
+
+@dataclass
+class ActionLogEntry:
+    log_id: str
+    log_type: ActionLogType
+    timestamp: float
+    level: str
+    message: str
+    source: str
+    product_id: str = ""
+    detection_id: str = ""
+    details: Dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def create(cls, log_type: ActionLogType, level: str, message: str, source: str,
+               product_id: str = "", detection_id: str = "",
+               details: Optional[Dict[str, Any]] = None) -> "ActionLogEntry":
+        return cls(
+            log_id=str(uuid.uuid4()),
+            log_type=log_type,
+            timestamp=time.time(),
+            level=level,
+            message=message,
+            source=source,
+            product_id=product_id,
+            detection_id=detection_id,
+            details=details or {}
+        )
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "log_id": self.log_id,
+            "log_type": self.log_type.value,
+            "timestamp": self.timestamp,
+            "level": self.level,
+            "message": self.message,
+            "source": self.source,
+            "product_id": self.product_id,
+            "detection_id": self.detection_id,
+            "details": self.details
+        }
+
+
+@dataclass
+class DatabaseConfig:
+    type: str = "sqlite"
+    host: str = "localhost"
+    port: int = 3306
+    database: str = "defect_db"
+    username: str = ""
+    password: str = ""
+    table_prefix: str = "defect_"
+    enable_timescaledb: bool = False
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "type": self.type,
+            "host": self.host,
+            "port": self.port,
+            "database": self.database,
+            "username": self.username,
+            "password": "***",
+            "table_prefix": self.table_prefix,
+            "enable_timescaledb": self.enable_timescaledb
+        }

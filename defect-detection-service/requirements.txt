@@ -23,5 +23,9 @@ mypy>=1.5.0
 # Prometheus monitoring
 prometheus-client>=0.17.0
 
-# PLC communication (optional)
-# pymodbus>=3.5.0
+# PLC communication
+pymodbus>=3.5.0
+# OPC UA communication
+opcua>=0.98.13
+# InfluxDB (optional)
+# influxdb>=5.3.1

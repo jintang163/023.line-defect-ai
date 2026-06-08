@@ -12,6 +12,18 @@ from src.utils.logger import Logger
 
 logger = Logger().logger
 
+try:
+    from src.plc.plc_connector import PLCConnector
+    PLC_AVAILABLE = True
+except ImportError:
+    PLC_AVAILABLE = False
+
+try:
+    from src.action_logger.action_logger import ActionLogger
+    ACTION_LOGGER_AVAILABLE = True
+except ImportError:
+    ACTION_LOGGER_AVAILABLE = False
+
 
 class AlertLevel(Enum):
     INFO = "info"
@@ -21,19 +33,36 @@ class AlertLevel(Enum):
 
 
 class AlertManager:
-    def __init__(self, max_history: int = 1000):
+    def __init__(self, max_history: int = 1000,
+                 plc_connector: Optional["PLCConnector"] = None,
+                 action_logger: Optional["ActionLogger"] = None,
+                 consecutive_ng_threshold: int = 5,
+                 auto_stop_line: bool = True):
         self._alert_history: deque = deque(maxlen=max_history)
         self._alert_callbacks: Dict[AlertAction, List[Callable[[AlertMessage], None]]] = {}
         self._stats: Dict[str, int] = {
             "total_alerts": 0,
             "critical_alerts": 0,
             "reject_actions": 0,
-            "stop_line_actions": 0
+            "stop_line_actions": 0,
+            "alarm_actions": 0,
+            "plc_commands_sent": 0,
+            "plc_commands_failed": 0
         }
         self._consecutive_ng_count = 0
-        self._consecutive_ng_threshold = 5
+        self._consecutive_ng_threshold = consecutive_ng_threshold
+        self._auto_stop_line = auto_stop_line
         self._stop_line_active = False
         self._lock = threading.RLock()
+
+        self._plc_connector = plc_connector
+        self._action_logger = action_logger
+
+        if self._plc_connector:
+            logger.info("✅ PLC连接器已集成到告警管理器")
+
+        if self._action_logger:
+            logger.info("✅ 动作日志记录器已集成到告警管理器")
 
         self._register_default_callbacks()
 
@@ -63,18 +92,23 @@ class AlertManager:
                     alerts.append(alert)
                     self._execute_alert_callbacks(alert)
 
-            if self._consecutive_ng_count >= self._consecutive_ng_threshold:
+            if self._auto_stop_line and self._consecutive_ng_count >= self._consecutive_ng_threshold:
                 stop_alert = AlertMessage.create(
                     level=AlertLevel.CRITICAL.value,
                     category="consecutive_ng",
-                    message=f"连续{self._consecutive_ng_count}个产品检测不合格",
+                    message=f"连续{self._consecutive_ng_count}个产品检测不合格，超过阈值{self._consecutive_ng_threshold}",
                     source="alert_manager",
                     action=AlertAction.STOP_LINE,
                     detection_id=detection_output.detection_id,
-                    details={"consecutive_count": self._consecutive_ng_count}
+                    details={
+                        "consecutive_count": self._consecutive_ng_count,
+                        "threshold": self._consecutive_ng_threshold,
+                        "auto_triggered": True
+                    }
                 )
                 alerts.append(stop_alert)
                 self._execute_alert_callbacks(stop_alert)
+                logger.critical(f"🔴 连续NG保护触发: {self._consecutive_ng_count}/{self._consecutive_ng_threshold}，自动停机")
 
             if detection_output.alert_action == AlertAction.STOP_LINE:
                 self._stop_line_active = True
@@ -189,16 +223,78 @@ class AlertManager:
         )
 
     def _warn_alert(self, alert: AlertMessage):
-        logger.warning(f"警告告警触发: {alert.message}")
+        self._stats["alarm_actions"] += 1
+        logger.warning(f"⚠️  警告告警触发: {alert.message}")
+
+        if self._plc_connector and self._plc_connector.enabled:
+            try:
+                self._plc_connector.send_alarm_command(
+                    detection_id=alert.detection_id,
+                    alarm_type=alert.category
+                )
+                self._stats["plc_commands_sent"] += 1
+            except Exception as e:
+                logger.error(f"发送报警PLC指令失败: {e}")
+                self._stats["plc_commands_failed"] += 1
+
+        if self._action_logger and self._action_logger.enabled:
+            try:
+                self._action_logger.log_alert(alert)
+            except Exception as e:
+                logger.warning(f"记录告警动作日志失败: {e}")
 
     def _reject_alert(self, alert: AlertMessage):
         self._stats["reject_actions"] += 1
-        logger.warning(f"剔除信号已发送: {alert.message}")
+        logger.warning(f"🚫 剔除信号已发送: {alert.message}")
+
+        if self._plc_connector and self._plc_connector.enabled:
+            try:
+                defect_types = []
+                if "defect_type" in alert.details:
+                    from src.utils.schemas import DefectType
+                    try:
+                        dt = DefectType(alert.details["defect_type"])
+                        defect_types.append(dt)
+                    except:
+                        pass
+
+                self._plc_connector.send_reject_command(
+                    detection_id=alert.detection_id,
+                    defect_types=defect_types,
+                    alert_action=AlertAction.REJECT
+                )
+                self._stats["plc_commands_sent"] += 1
+            except Exception as e:
+                logger.error(f"发送剔除PLC指令失败: {e}")
+                self._stats["plc_commands_failed"] += 1
+
+        if self._action_logger and self._action_logger.enabled:
+            try:
+                self._action_logger.log_alert(alert)
+            except Exception as e:
+                logger.warning(f"记录剔除动作日志失败: {e}")
 
     def _stop_line_alert(self, alert: AlertMessage):
         self._stats["stop_line_actions"] += 1
         self._stop_line_active = True
-        logger.critical(f"生产线停机信号已发送: {alert.message}")
+        logger.critical(f"🛑 生产线停机信号已发送: {alert.message}")
+
+        if self._plc_connector and self._plc_connector.enabled:
+            try:
+                self._plc_connector.send_stop_line_command(
+                    detection_id=alert.detection_id,
+                    reason=alert.message
+                )
+                self._stats["plc_commands_sent"] += 1
+            except Exception as e:
+                logger.error(f"发送停机PLC指令失败: {e}")
+                self._stats["plc_commands_failed"] += 1
+
+        if self._action_logger and self._action_logger.enabled:
+            try:
+                self._action_logger.log_alert(alert)
+            except Exception as e:
+                logger.warning(f"记录停机动作日志失败: {e}")
 
     def _update_stats(self, alert: AlertMessage):
         self._stats["total_alerts"] += 1
@@ -219,11 +315,32 @@ class AlertManager:
             else:
                 self._alert_callbacks = {k: [] for k in self._alert_callbacks}
 
-    def reset_stop_line(self):
+    def reset_stop_line(self, operator: str = "system", reason: str = "系统重置"):
         with self._lock:
             self._stop_line_active = False
             self._consecutive_ng_count = 0
-            logger.info("生产线停机状态已重置")
+            logger.info(f"🔄 生产线停机状态已重置 | 操作员: {operator} | 原因: {reason}")
+
+            if self._plc_connector and self._plc_connector.enabled:
+                try:
+                    self._plc_connector.send_reset_command()
+                    self._stats["plc_commands_sent"] += 1
+                    logger.info("✅ PLC复位指令已发送")
+                except Exception as e:
+                    logger.error(f"发送PLC复位指令失败: {e}")
+                    self._stats["plc_commands_failed"] += 1
+
+            if self._action_logger and self._action_logger.enabled:
+                try:
+                    from src.utils.schemas import ActionLogType
+                    self._action_logger.log_system_event(
+                        event=f"生产线停机状态已重置 | 操作员: {operator} | 原因: {reason}",
+                        level="info",
+                        source="alert_manager",
+                        details={"operator": operator, "reason": reason}
+                    )
+                except Exception as e:
+                    logger.warning(f"记录重置动作日志失败: {e}")
 
     def get_recent_alerts(self, limit: int = 100, level: Optional[str] = None) -> List[AlertMessage]:
         with self._lock:
@@ -237,8 +354,13 @@ class AlertManager:
             return {
                 **self._stats,
                 "consecutive_ng_count": self._consecutive_ng_count,
+                "consecutive_ng_threshold": self._consecutive_ng_threshold,
+                "auto_stop_line": self._auto_stop_line,
                 "stop_line_active": self._stop_line_active,
-                "alert_history_size": len(self._alert_history)
+                "alert_history_size": len(self._alert_history),
+                "plc_connected": self._plc_connector.is_connected() if self._plc_connector else False,
+                "plc_enabled": self._plc_connector.enabled if self._plc_connector else False,
+                "action_logger_enabled": self._action_logger.enabled if self._action_logger else False
             }
 
     def clear_history(self):

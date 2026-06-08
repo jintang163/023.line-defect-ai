@@ -75,3 +75,15 @@ class ConfigManager:
 
     def get_api_config(self) -> Dict[str, Any]:
         return self._config.get("api", {})
+
+    def get_auto_stop_line(self) -> bool:
+        return self._config.get("alert", {}).get("auto_stop_line", True)
+
+    def get_action_log_config(self) -> Dict[str, Any]:
+        return self._config.get("action_log", {})
+
+    def get_production_config(self) -> Dict[str, Any]:
+        return self._config.get("production", {})
+
+    def get_manual_override_config(self) -> Dict[str, Any]:
+        return self._config.get("manual_override", {})

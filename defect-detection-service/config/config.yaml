@@ -56,6 +56,7 @@ messaging:
 
 alert:
   consecutive_ng_threshold: 5
+  auto_stop_line: true
   webhook_url: ""
   email_notification: false
   smtp_server: ""
@@ -66,12 +67,44 @@ alert:
 
 plc:
   enable: false
-  type: "modbus"
+  type: "modbus_tcp"
   host: "192.168.1.100"
   port: 502
   slave_id: 1
   reject_coil_address: 100
   stop_line_coil_address: 101
+  alarm_coil_address: 102
+  reset_coil_address: 103
+  heartbeat_coil_address: 104
+  defect_code_register: 200
+  pulse_duration_ms: 500
+  command_timeout_ms: 3000
+  max_retries: 3
+  retry_delay_ms: 1000
+
+action_log:
+  enable: true
+  max_memory_logs: 10000
+  enable_file_logging: true
+  enable_database_logging: false
+  enable_influxdb_logging: false
+  log_file_path: "./data/action_logs.jsonl"
+  sqlite_db_path: "./data/action_logs.db"
+  influxdb:
+    host: "localhost"
+    port: 8086
+    username: ""
+    password: ""
+    database: "defect_logs"
+
+production:
+  enable: true
+  snapshot_interval_count: 1000
+  consecutive_ng_threshold: 10
+  max_snapshots_per_product: 1000
+
+manual_override:
+  max_history: 10000
 
 monitoring:
   enable_prometheus: true
