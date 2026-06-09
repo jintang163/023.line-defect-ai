@@ -433,10 +433,11 @@ function login() {
   apiPost('/auth/login', { username: username, password: password }).then(function(data) {
     token = data.token;
     localStorage.setItem('monitor_token', token);
+    var userInfo = data.user || {};
     currentUser = {
-      username: data.username || username,
-      role: data.role || 'viewer',
-      permissions: data.permissions || ['view']
+      username: userInfo.username || username,
+      role: userInfo.role || 'operator',
+      permissions: userInfo.permissions || ['view']
     };
     document.getElementById('login-modal').classList.remove('show');
     showApp();

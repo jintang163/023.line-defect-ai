@@ -499,6 +499,14 @@ class DefectDetectionService:
             def log_message(self, format, *args):
                 logger.debug(f"HTTP {args[0]} {args[1]}")
 
+            def do_OPTIONS(self):
+                self.send_response(204)
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+                self.send_header("Access-Control-Allow-Headers", "Authorization, Content-Type")
+                self.send_header("Access-Control-Max-Age", "86400")
+                self.end_headers()
+
             def do_GET(self):
                 parsed = urlparse(self.path)
                 path = parsed.path
@@ -559,11 +567,19 @@ class DefectDetectionService:
                         self._send_json(200, {"status": "cleared"})
 
                     elif path == "/api/config":
-                        self._send_json(200, service.config_manager.config)
+                        user = self._require_auth("full_config")
+                        if not user:
+                            self._send_json(401, {"error": "Authentication required"})
+                        else:
+                            self._send_json(200, service.config_manager.config)
 
                     elif path == "/api/reload-config":
-                        service.config_manager.reload()
-                        self._send_json(200, {"status": "reloaded"})
+                        user = self._require_auth("full_config")
+                        if not user:
+                            self._send_json(401, {"error": "Authentication required"})
+                        else:
+                            service.config_manager.reload()
+                            self._send_json(200, {"status": "reloaded"})
 
                     elif path == "/api/plc/status":
                         plc_status = {
@@ -788,13 +804,19 @@ class DefectDetectionService:
                             self._serve_download_file(file_path_param)
 
                     elif path == "/api/monitor/health":
-                        if service.system_monitor_manager and service.system_monitor_manager.enabled:
+                        user = self._require_auth("view")
+                        if not user:
+                            self._send_json(401, {"error": "Authentication required"})
+                        elif service.system_monitor_manager and service.system_monitor_manager.enabled:
                             self._send_json(200, service.system_monitor_manager.get_health_status())
                         else:
                             self._send_json(400, {"error": "System monitor not available"})
 
                     elif path == "/api/monitor/health/history":
-                        if service.system_monitor_manager and service.system_monitor_manager.enabled:
+                        user = self._require_auth("view")
+                        if not user:
+                            self._send_json(401, {"error": "Authentication required"})
+                        elif service.system_monitor_manager and service.system_monitor_manager.enabled:
                             limit = int(params.get("limit", [100])[0])
                             history = service.system_monitor_manager.health_checker.get_history(limit)
                             self._send_json(200, {"history": history})
@@ -823,13 +845,19 @@ class DefectDetectionService:
                             self._send_json(400, {"error": "System monitor not available"})
 
                     elif path == "/api/monitor/dashboard":
-                        if service.system_monitor_manager and service.system_monitor_manager.enabled:
+                        user = self._require_auth("view")
+                        if not user:
+                            self._send_json(401, {"error": "Authentication required"})
+                        elif service.system_monitor_manager and service.system_monitor_manager.enabled:
                             self._send_json(200, service.system_monitor_manager.get_history_dashboard_data())
                         else:
                             self._send_json(400, {"error": "System monitor not available"})
 
                     elif path == "/api/monitor/params":
-                        if service.system_monitor_manager and service.system_monitor_manager.enabled:
+                        user = self._require_auth("view")
+                        if not user:
+                            self._send_json(401, {"error": "Authentication required"})
+                        elif service.system_monitor_manager and service.system_monitor_manager.enabled:
                             product_id = params.get("product_id", [None])[0]
                             if product_id and service.system_monitor_manager.param_adjuster:
                                 params_data = service.system_monitor_manager.param_adjuster.get_product_params(product_id)
@@ -840,7 +868,10 @@ class DefectDetectionService:
                             self._send_json(400, {"error": "System monitor not available"})
 
                     elif path == "/api/monitor/params/log":
-                        if service.system_monitor_manager and service.system_monitor_manager.enabled:
+                        user = self._require_auth("adjust_params")
+                        if not user:
+                            self._send_json(401, {"error": "Authentication required"})
+                        elif service.system_monitor_manager and service.system_monitor_manager.enabled:
                             limit = int(params.get("limit", [100])[0])
                             log = service.system_monitor_manager.param_adjuster.get_change_log(limit)
                             self._send_json(200, {"change_log": log})
@@ -848,7 +879,10 @@ class DefectDetectionService:
                             self._send_json(400, {"error": "System monitor not available"})
 
                     elif path == "/api/monitor/users":
-                        if service.system_monitor_manager and service.system_monitor_manager.enabled:
+                        user = self._require_auth("full_config")
+                        if not user:
+                            self._send_json(401, {"error": "Authentication required"})
+                        elif service.system_monitor_manager and service.system_monitor_manager.enabled:
                             self._send_json(200, {"users": service.system_monitor_manager.role_manager.list_users()})
                         else:
                             self._send_json(400, {"error": "System monitor not available"})
@@ -869,24 +903,56 @@ class DefectDetectionService:
                     body = self.rfile.read(content_length)
                     data = json.loads(body) if body else {}
 
-                    if path == "/api/product/switch":
-                        product_id = data.get("product_id")
-                        if product_id:
-                            success = service.switch_product(product_id)
-                            self._send_json(200, {"success": success})
+                    if path == "/api/monitor/auth/login":
+                        if service.system_monitor_manager and service.system_monitor_manager.enabled:
+                            username = data.get("username", "")
+                            password = data.get("password", "")
+                            token = service.system_monitor_manager.authenticate(username, password)
+                            if token:
+                                user_info = service.system_monitor_manager.verify_token(token)
+                                self._send_json(200, {"token": token, "user": user_info})
+                            else:
+                                self._send_json(401, {"error": "Invalid credentials"})
                         else:
-                            self._send_json(400, {"error": "Missing product_id"})
+                            self._send_json(400, {"error": "System monitor not available"})
+
+                    elif path == "/api/monitor/auth/verify":
+                        token = data.get("token", "")
+                        if service.system_monitor_manager and service.system_monitor_manager.enabled:
+                            user_info = service.system_monitor_manager.verify_token(token)
+                            if user_info:
+                                self._send_json(200, {"valid": True, "user": user_info})
+                            else:
+                                self._send_json(200, {"valid": False})
+                        else:
+                            self._send_json(400, {"error": "System monitor not available"})
+
+                    elif path == "/api/product/switch":
+                        user = self._require_write_auth("adjust_params")
+                        if not user:
+                            self._send_json(401, {"error": "Authentication required"})
+                        else:
+                            product_id = data.get("product_id")
+                            if product_id:
+                                success = service.switch_product(product_id)
+                                self._send_json(200, {"success": success})
+                            else:
+                                self._send_json(400, {"error": "Missing product_id"})
 
                     elif path == "/api/algorithm/params":
-                        algo_type = data.get("algorithm_type")
-                        params = data.get("params", {})
-                        if algo_type:
-                            success = service.algorithm_manager.reload_algorithm_params(
-                                AlgorithmType(algo_type), params
-                            )
-                            self._send_json(200, {"success": success})
+                        user = self._require_write_auth("adjust_params")
+                        if not user:
+                            self._send_json(401, {"error": "Authentication required"})
                         else:
-                            self._send_json(400, {"error": "Missing algorithm_type"})
+                            algo_type = data.get("algorithm_type")
+                            params = data.get("params", {})
+                            if algo_type:
+                                success = service.algorithm_manager.reload_algorithm_params(
+                                    AlgorithmType(algo_type), params
+                                )
+                                self._send_json(200, {"success": success})
+                            else:
+                                self._send_json(400, {"error": "Missing algorithm_type"})
 
                     elif path == "/api/detect":
                         image_base64 = data.get("image")
@@ -922,11 +988,18 @@ class DefectDetectionService:
                             self._send_json(500, {"error": "Detection failed"})
 
                     elif path == "/api/mq/reconnect":
-                        success = service.message_consumer.reconnect() and service.result_producer.reconnect()
-                        self._send_json(200, {"success": success})
+                        user = self._require_write_auth("adjust_params")
+                        if not user:
+                            self._send_json(401, {"error": "Authentication required"})
+                        else:
+                            success = service.message_consumer.reconnect() and service.result_producer.reconnect()
+                            self._send_json(200, {"success": success})
 
                     elif path == "/api/manual-override/apply":
-                        if not service.manual_override_manager:
+                        user = self._require_write_auth("manual_override")
+                        if not user:
+                            self._send_json(401, {"error": "Authentication required"})
+                        elif not service.manual_override_manager:
                             self._send_json(400, {"error": "Manual override manager not available"})
                             return
 
@@ -968,149 +1041,151 @@ class DefectDetectionService:
                             self._send_json(500, {"error": "Failed to apply override"})
 
                     elif path == "/api/alerts/reset-stop-line":
-                        operator = data.get("operator", "system")
-                        reason = data.get("reason", "手动重置")
-                        service.alert_manager.reset_stop_line(operator=operator, reason=reason)
-                        self._send_json(200, {"status": "reset", "operator": operator, "reason": reason})
+                        user = self._require_write_auth("manual_override")
+                        if not user:
+                            self._send_json(401, {"error": "Authentication required"})
+                        else:
+                            operator = data.get("operator", "system")
+                            reason = data.get("reason", "手动重置")
+                            service.alert_manager.reset_stop_line(operator=operator, reason=reason)
+                            self._send_json(200, {"status": "reset", "operator": operator, "reason": reason})
 
                     elif path == "/api/plc/command/reject":
-                        if not service.plc_connector or not service.plc_connector.enabled:
+                        user = self._require_write_auth("manual_override")
+                        if not user:
+                            self._send_json(401, {"error": "Authentication required"})
+                        elif not service.plc_connector or not service.plc_connector.enabled:
                             self._send_json(400, {"error": "PLC connector not available or disabled"})
-                            return
-
-                        detection_id = data.get("detection_id", "")
-                        command_id = service.plc_connector.send_reject_command(
-                            detection_id=detection_id,
-                            defect_types=None,
-                            alert_action=AlertAction.REJECT
-                        )
-                        self._send_json(200, {"command_id": command_id})
+                        else:
+                            detection_id = data.get("detection_id", "")
+                            command_id = service.plc_connector.send_reject_command(
+                                detection_id=detection_id,
+                                defect_types=None,
+                                alert_action=AlertAction.REJECT
+                            )
+                            self._send_json(200, {"command_id": command_id})
 
                     elif path == "/api/plc/command/stop-line":
-                        if not service.plc_connector or not service.plc_connector.enabled:
+                        user = self._require_write_auth("manual_override")
+                        if not user:
+                            self._send_json(401, {"error": "Authentication required"})
+                        elif not service.plc_connector or not service.plc_connector.enabled:
                             self._send_json(400, {"error": "PLC connector not available or disabled"})
-                            return
-
-                        detection_id = data.get("detection_id", "")
-                        reason = data.get("reason", "手动触发")
-                        command_id = service.plc_connector.send_stop_line_command(
-                            detection_id=detection_id,
-                            reason=reason
-                        )
-                        self._send_json(200, {"command_id": command_id})
+                        else:
+                            detection_id = data.get("detection_id", "")
+                            reason = data.get("reason", "手动触发")
+                            command_id = service.plc_connector.send_stop_line_command(
+                                detection_id=detection_id,
+                                reason=reason
+                            )
+                            self._send_json(200, {"command_id": command_id})
 
                     elif path == "/api/plc/command/reset":
-                        if not service.plc_connector or not service.plc_connector.enabled:
+                        user = self._require_write_auth("manual_override")
+                        if not user:
+                            self._send_json(401, {"error": "Authentication required"})
+                        elif not service.plc_connector or not service.plc_connector.enabled:
                             self._send_json(400, {"error": "PLC connector not available or disabled"})
-                            return
-
-                        command_id = service.plc_connector.send_reset_command()
-                        self._send_json(200, {"command_id": command_id})
+                        else:
+                            command_id = service.plc_connector.send_reset_command()
+                            self._send_json(200, {"command_id": command_id})
 
                     elif path == "/api/plc/command/alarm":
-                        if not service.plc_connector or not service.plc_connector.enabled:
+                        user = self._require_write_auth("manual_override")
+                        if not user:
+                            self._send_json(401, {"error": "Authentication required"})
+                        elif not service.plc_connector or not service.plc_connector.enabled:
                             self._send_json(400, {"error": "PLC connector not available or disabled"})
-                            return
-
-                        detection_id = data.get("detection_id", "")
-                        alarm_type = data.get("alarm_type", "manual")
-                        command_id = service.plc_connector.send_alarm_command(
-                            detection_id=detection_id,
-                            alarm_type=alarm_type
-                        )
-                        self._send_json(200, {"command_id": command_id})
+                        else:
+                            detection_id = data.get("detection_id", "")
+                            alarm_type = data.get("alarm_type", "manual")
+                            command_id = service.plc_connector.send_alarm_command(
+                                detection_id=detection_id,
+                                alarm_type=alarm_type
+                            )
+                            self._send_json(200, {"command_id": command_id})
 
                     elif path == "/api/data-management/export/images":
-                        if not service.data_management_manager or not service.data_management_manager.enabled:
+                        user = self._require_write_auth("view")
+                        if not user:
+                            self._send_json(401, {"error": "Authentication required"})
+                        elif not service.data_management_manager or not service.data_management_manager.enabled:
                             self._send_json(400, {"error": "Data management not available"})
-                            return
-                        detection_ids = data.get("detection_ids", [])
-                        output_filename = data.get("output_filename")
-                        if not detection_ids:
-                            self._send_json(400, {"error": "Missing detection_ids"})
-                            return
-                        zip_path = service.data_management_manager.export_images_zip(
-                            detection_ids, output_filename
-                        )
-                        if zip_path:
-                            self._send_json(200, {"file_path": zip_path})
                         else:
-                            self._send_json(500, {"error": "Export failed"})
+                            detection_ids = data.get("detection_ids", [])
+                            output_filename = data.get("output_filename")
+                            if not detection_ids:
+                                self._send_json(400, {"error": "Missing detection_ids"})
+                            else:
+                                zip_path = service.data_management_manager.export_images_zip(
+                                    detection_ids, output_filename
+                                )
+                                if zip_path:
+                                    self._send_json(200, {"file_path": zip_path})
+                                else:
+                                    self._send_json(500, {"error": "Export failed"})
 
                     elif path == "/api/data-management/export/records":
-                        if not service.data_management_manager or not service.data_management_manager.enabled:
+                        user = self._require_write_auth("view")
+                        if not user:
+                            self._send_json(401, {"error": "Authentication required"})
+                        elif not service.data_management_manager or not service.data_management_manager.enabled:
                             self._send_json(400, {"error": "Data management not available"})
-                            return
-                        detection_ids = data.get("detection_ids")
-                        product_id = data.get("product_id")
-                        start_time = data.get("start_time")
-                        end_time = data.get("end_time")
-                        result_filter = data.get("result")
-                        defect_type = data.get("defect_type")
-                        output_filename = data.get("output_filename")
-                        start_time_f = float(start_time) if start_time else None
-                        end_time_f = float(end_time) if end_time else None
-                        csv_path = service.data_management_manager.export_records_excel(
-                            detection_ids=detection_ids, product_id=product_id,
-                            start_time=start_time_f, end_time=end_time_f,
-                            result=result_filter, defect_type=defect_type,
-                            output_filename=output_filename
-                        )
-                        if csv_path:
-                            self._send_json(200, {"file_path": csv_path})
                         else:
-                            self._send_json(500, {"error": "Export failed"})
+                            detection_ids = data.get("detection_ids")
+                            product_id = data.get("product_id")
+                            start_time = data.get("start_time")
+                            end_time = data.get("end_time")
+                            result_filter = data.get("result")
+                            defect_type = data.get("defect_type")
+                            output_filename = data.get("output_filename")
+                            start_time_f = float(start_time) if start_time else None
+                            end_time_f = float(end_time) if end_time else None
+                            csv_path = service.data_management_manager.export_records_excel(
+                                detection_ids=detection_ids, product_id=product_id,
+                                start_time=start_time_f, end_time=end_time_f,
+                                result=result_filter, defect_type=defect_type,
+                                output_filename=output_filename
+                            )
+                            if csv_path:
+                                self._send_json(200, {"file_path": csv_path})
+                            else:
+                                self._send_json(500, {"error": "Export failed"})
 
                     elif path == "/api/data-management/export/all":
-                        if not service.data_management_manager or not service.data_management_manager.enabled:
+                        user = self._require_write_auth("view")
+                        if not user:
+                            self._send_json(401, {"error": "Authentication required"})
+                        elif not service.data_management_manager or not service.data_management_manager.enabled:
                             self._send_json(400, {"error": "Data management not available"})
-                            return
-                        detection_ids = data.get("detection_ids")
-                        product_id = data.get("product_id")
-                        start_time = data.get("start_time")
-                        end_time = data.get("end_time")
-                        result_filter = data.get("result")
-                        defect_type = data.get("defect_type")
-                        output_filename = data.get("output_filename")
-                        start_time_f = float(start_time) if start_time else None
-                        end_time_f = float(end_time) if end_time else None
-                        zip_path = service.data_management_manager.export_all(
-                            detection_ids=detection_ids, product_id=product_id,
-                            start_time=start_time_f, end_time=end_time_f,
-                            result=result_filter, defect_type=defect_type,
-                            output_filename=output_filename
-                        )
-                        if zip_path:
-                            self._send_json(200, {"file_path": zip_path})
                         else:
-                            self._send_json(500, {"error": "Export failed"})
-
-                    elif path == "/api/monitor/auth/login":
-                        if service.system_monitor_manager and service.system_monitor_manager.enabled:
-                            username = data.get("username", "")
-                            password = data.get("password", "")
-                            token = service.system_monitor_manager.authenticate(username, password)
-                            if token:
-                                user_info = service.system_monitor_manager.verify_token(token)
-                                self._send_json(200, {"token": token, "user": user_info})
+                            detection_ids = data.get("detection_ids")
+                            product_id = data.get("product_id")
+                            start_time = data.get("start_time")
+                            end_time = data.get("end_time")
+                            result_filter = data.get("result")
+                            defect_type = data.get("defect_type")
+                            output_filename = data.get("output_filename")
+                            start_time_f = float(start_time) if start_time else None
+                            end_time_f = float(end_time) if end_time else None
+                            zip_path = service.data_management_manager.export_all(
+                                detection_ids=detection_ids, product_id=product_id,
+                                start_time=start_time_f, end_time=end_time_f,
+                                result=result_filter, defect_type=defect_type,
+                                output_filename=output_filename
+                            )
+                            if zip_path:
+                                self._send_json(200, {"file_path": zip_path})
                             else:
-                                self._send_json(401, {"error": "Invalid credentials"})
-                        else:
-                            self._send_json(400, {"error": "System monitor not available"})
-
-                    elif path == "/api/monitor/auth/verify":
-                        token = data.get("token", "")
-                        if service.system_monitor_manager and service.system_monitor_manager.enabled:
-                            user_info = service.system_monitor_manager.verify_token(token)
-                            if user_info:
-                                self._send_json(200, {"valid": True, "user": user_info})
-                            else:
-                                self._send_json(200, {"valid": False})
-                        else:
-                            self._send_json(400, {"error": "System monitor not available"})
+                                self._send_json(500, {"error": "Export failed"})
 
                     elif path == "/api/monitor/auth/users":
-                        if service.system_monitor_manager and service.system_monitor_manager.enabled:
+                        user = self._require_write_auth("full_config")
+                        if not user:
+                            self._send_json(401, {"error": "Authentication required"})
+                        elif not service.system_monitor_manager or not service.system_monitor_manager.enabled:
+                            self._send_json(400, {"error": "System monitor not available"})
+                        else:
                             action = data.get("action", "list")
                             if action == "add":
                                 username = data.get("username", "")
@@ -1131,35 +1206,38 @@ class DefectDetectionService:
                             else:
                                 users = service.system_monitor_manager.role_manager.list_users()
                                 self._send_json(200, {"users": users})
-                        else:
-                            self._send_json(400, {"error": "System monitor not available"})
 
                     elif path == "/api/monitor/params/adjust":
-                        if service.system_monitor_manager and service.system_monitor_manager.enabled:
+                        user = self._require_write_auth("adjust_params")
+                        if not user:
+                            self._send_json(401, {"error": "Authentication required"})
+                        elif not service.system_monitor_manager or not service.system_monitor_manager.enabled:
+                            self._send_json(400, {"error": "System monitor not available"})
+                        else:
                             product_id = data.get("product_id", "")
                             param_path = data.get("param_path", "")
                             new_value = data.get("new_value")
-                            operator = data.get("operator", "system")
-                            token = data.get("token", "")
+                            operator = data.get("operator", user.get("username", "system"))
                             if not product_id or not param_path or new_value is None:
                                 self._send_json(400, {"error": "Missing product_id, param_path, or new_value"})
-                            elif token and not service.system_monitor_manager.check_permission(token, "adjust_params"):
-                                self._send_json(403, {"error": "Permission denied"})
                             else:
                                 success = service.system_monitor_manager.param_adjuster.adjust_product_param(
                                     product_id, param_path, new_value, operator
                                 )
                                 self._send_json(200, {"success": success})
-                        else:
-                            self._send_json(400, {"error": "System monitor not available"})
 
                     elif path == "/api/monitor/params/threshold":
-                        if service.system_monitor_manager and service.system_monitor_manager.enabled:
+                        user = self._require_write_auth("adjust_params")
+                        if not user:
+                            self._send_json(401, {"error": "Authentication required"})
+                        elif not service.system_monitor_manager or not service.system_monitor_manager.enabled:
+                            self._send_json(400, {"error": "System monitor not available"})
+                        else:
                             product_id = data.get("product_id", "")
                             defect_type = data.get("defect_type", "")
                             field = data.get("field", "")
                             new_value = data.get("new_value")
-                            operator = data.get("operator", "system")
+                            operator = data.get("operator", user.get("username", "system"))
                             if not all([product_id, defect_type, field, new_value is not None]):
                                 self._send_json(400, {"error": "Missing required fields"})
                             else:
@@ -1167,22 +1245,26 @@ class DefectDetectionService:
                                     product_id, defect_type, field, new_value, operator
                                 )
                                 self._send_json(200, {"success": success})
-                        else:
-                            self._send_json(400, {"error": "System monitor not available"})
 
                     elif path == "/api/monitor/params/rollback":
-                        if service.system_monitor_manager and service.system_monitor_manager.enabled:
+                        user = self._require_write_auth("adjust_params")
+                        if not user:
+                            self._send_json(401, {"error": "Authentication required"})
+                        elif not service.system_monitor_manager or not service.system_monitor_manager.enabled:
+                            self._send_json(400, {"error": "System monitor not available"})
+                        else:
                             change_id = data.get("change_id")
                             if change_id is None:
                                 self._send_json(400, {"error": "Missing change_id"})
                             else:
                                 success = service.system_monitor_manager.param_adjuster.rollback_change(change_id)
                                 self._send_json(200, {"success": success})
-                        else:
-                            self._send_json(400, {"error": "System monitor not available"})
 
                     elif path == "/api/monitor/health/check":
-                        if service.system_monitor_manager and service.system_monitor_manager.enabled:
+                        user = self._require_auth("view")
+                        if not user:
+                            self._send_json(401, {"error": "Authentication required"})
+                        elif service.system_monitor_manager and service.system_monitor_manager.enabled:
                             result = service.system_monitor_manager.get_health_status()
                             self._send_json(200, result)
                         else:
@@ -1203,6 +1285,38 @@ class DefectDetectionService:
                 self.send_header("Access-Control-Allow-Origin", "*")
                 self.end_headers()
                 self.wfile.write(json.dumps(data, ensure_ascii=False, indent=2).encode("utf-8"))
+
+            def _extract_bearer_token(self) -> Optional[str]:
+                auth_header = self.headers.get("Authorization", "")
+                if auth_header.startswith("Bearer "):
+                    return auth_header[7:].strip()
+                return None
+
+            def _require_auth(self, permission: str = "view") -> Optional[Dict]:
+                if not service.system_monitor_manager or not service.system_monitor_manager.enabled:
+                    return {"username": "anonymous", "role": "admin", "permissions": ["view", "manual_override", "adjust_params", "full_config"]}
+                token = self._extract_bearer_token()
+                if not token:
+                    return None
+                user_info = service.system_monitor_manager.verify_token(token)
+                if not user_info:
+                    return None
+                if permission not in user_info.get("permissions", []):
+                    return None
+                return user_info
+
+            def _require_write_auth(self, permission: str = "adjust_params") -> Optional[Dict]:
+                if not service.system_monitor_manager or not service.system_monitor_manager.enabled:
+                    return {"username": "anonymous", "role": "admin", "permissions": ["view", "manual_override", "adjust_params", "full_config"]}
+                token = self._extract_bearer_token()
+                if not token:
+                    return None
+                user_info = service.system_monitor_manager.verify_token(token)
+                if not user_info:
+                    return None
+                if permission not in user_info.get("permissions", []):
+                    return None
+                return user_info
 
             def _serve_static_file(self, relative_path: str, content_type: str):
                 base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))

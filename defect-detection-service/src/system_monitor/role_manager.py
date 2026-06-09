@@ -97,18 +97,19 @@ class RoleManager:
             permissions = self.ROLE_PERMISSIONS[role]
             return {
                 "username": payload["username"],
-                "role": role,
-                "permissions": permissions,
+                "role": role.value,
+                "permissions": [p.value for p in permissions],
             }
         except Exception as e:
             logger.error(f"Token verification error: {e}")
             return None
 
-    def check_permission(self, token: str, permission: Permission) -> bool:
+    def check_permission(self, token: str, permission) -> bool:
         info = self.verify_token(token)
         if info is None:
             return False
-        return permission in info["permissions"]
+        perm_value = permission.value if isinstance(permission, self.Permission) else permission
+        return perm_value in info["permissions"]
 
     def get_user_info(self, token: str) -> Optional[Dict]:
         return self.verify_token(token)
@@ -117,8 +118,8 @@ class RoleManager:
         return [
             {
                 "username": username,
-                "role": user["role"],
-                "permissions": user["permissions"],
+                "role": user["role"].value,
+                "permissions": [p.value for p in user["permissions"]],
             }
             for username, user in self.users.items()
         ]

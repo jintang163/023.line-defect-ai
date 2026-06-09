@@ -33,6 +33,7 @@ class ParamAdjuster:
 
         product_config = self._algorithm_manager._products[product_id]
         old_value = self._get_param_value(product_config, param_path)
+        old_value_serializable = old_value.value if hasattr(old_value, "value") else old_value
 
         try:
             self._set_param_value(product_config, param_path, new_value)
@@ -40,12 +41,16 @@ class ParamAdjuster:
             logger.error(f"Failed to set param {param_path} for product {product_id}: {e}")
             return False
 
+        new_value_serializable = new_value
+        if hasattr(new_value, "value"):
+            new_value_serializable = new_value.value
+
         self._add_change_log({
             "timestamp": datetime.now().isoformat(),
             "operator": operator,
             "param_path": param_path,
-            "old_value": old_value,
-            "new_value": new_value,
+            "old_value": old_value_serializable,
+            "new_value": new_value_serializable,
             "product_id": product_id,
         })
 
@@ -172,7 +177,8 @@ class ParamAdjuster:
         parts = param_path.split(".")
 
         if len(parts) == 1:
-            return getattr(product_config, parts[0])
+            val = getattr(product_config, parts[0])
+            return val.value if hasattr(val, "value") else val
 
         if parts[0] == "rois" and len(parts) >= 3:
             index = int(parts[1])
@@ -184,7 +190,8 @@ class ParamAdjuster:
             if parts[2] == "params" and len(parts) >= 4:
                 key = ".".join(parts[3:])
                 return product_config.algorithms[index].params.get(key)
-            return getattr(product_config.algorithms[index], parts[2])
+            val = getattr(product_config.algorithms[index], parts[2])
+            return val.value if hasattr(val, "value") else val
 
         if parts[0] == "defect_types" and len(parts) >= 3:
             type_name = parts[1]
@@ -200,7 +207,7 @@ class ParamAdjuster:
                 obj = obj.get(part)
             else:
                 obj = getattr(obj, part)
-        return obj
+        return obj.value if hasattr(obj, "value") else obj
 
     def _set_param_value(self, product_config, param_path: str, value: Any):
         parts = param_path.split(".")
