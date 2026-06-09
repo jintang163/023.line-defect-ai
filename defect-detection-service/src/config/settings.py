@@ -93,3 +93,9 @@ class ConfigManager:
 
     def get_system_monitor_config(self) -> Dict[str, Any]:
         return self._config.get("system_monitor", {})
+
+    def get_notification_config(self) -> Dict[str, Any]:
+        return self._config.get("notification", {})
+
+    def get_alert_config(self) -> Dict[str, Any]:
+        return self._config.get("alert", {})

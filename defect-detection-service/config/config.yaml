@@ -64,6 +64,57 @@ alert:
   smtp_username: ""
   smtp_password: ""
   notification_email: ""
+  urgent_repeat_interval_sec: 30
+  normal_push_enabled: false
+  relay_enabled: false
+  relay_green_coil: 201
+  relay_yellow_coil: 202
+  relay_red_coil: 203
+  relay_buzzer_coil: 204
+  alert_history_db_enabled: true
+
+notification:
+  enable: false
+  max_history: 5000
+  channels:
+    email:
+      enable: false
+      smtp_server: ""
+      smtp_port: 587
+      smtp_username: ""
+      smtp_password: ""
+      sender: ""
+      use_tls: true
+    dingtalk:
+      enable: false
+      webhook_url: ""
+      secret: ""
+      at_mobiles: []
+      at_all: false
+    sms:
+      enable: false
+      provider: ""
+      api_url: ""
+      api_key: ""
+      api_secret: ""
+      sign_name: ""
+      template_code: ""
+  receiver_groups:
+    urgent:
+      channels: ["email", "dingtalk", "sms"]
+      receivers:
+        email: []
+        dingtalk: []
+        sms: []
+    warning:
+      channels: ["email", "dingtalk"]
+      receivers:
+        email: []
+        dingtalk: []
+    info:
+      channels: ["dingtalk"]
+      receivers:
+        dingtalk: []
 
 plc:
   enable: false

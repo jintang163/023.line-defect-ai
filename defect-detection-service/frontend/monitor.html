@@ -224,6 +224,7 @@ body{
   <button class="tab-btn" data-tab="dashboard" data-perm="view">历史看板</button>
   <button class="tab-btn" data-tab="params" data-perm="adjust_params">参数调整</button>
   <button class="tab-btn" data-tab="health" data-perm="view">设备健康</button>
+  <button class="tab-btn" data-tab="alerts" data-perm="view">告警通知</button>
   <button class="tab-btn" data-tab="admin" data-perm="full_config">系统管理</button>
 </nav>
 
@@ -308,6 +309,71 @@ body{
       <thead><tr><th>时间</th><th>组件</th><th>状态</th><th>消息</th></tr></thead>
       <tbody id="health-history-body"></tbody>
     </table>
+  </div>
+</section>
+
+<section class="tab-content" id="tab-alerts">
+  <div class="stats-cards" id="alert-stats-cards">
+    <div class="stat-card red"><div class="stat-label">待确认紧急告警</div><div class="stat-value" id="alert-pending-count">0</div></div>
+    <div class="stat-card orange"><div class="stat-label">告警总数</div><div class="stat-value" id="alert-total-count">0</div></div>
+    <div class="stat-card"><div class="stat-label">继电器状态</div><div class="stat-value" id="alert-relay-state" style="font-size:20px">-</div></div>
+    <div class="stat-card purple"><div class="stat-label">通知推送</div><div class="stat-value" id="alert-notify-status" style="font-size:16px">-</div></div>
+  </div>
+  <div class="param-section" style="margin-bottom:16px">
+    <h4 style="display:inline-block">告警筛选</h4>
+    <div style="display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end;margin-top:12px">
+      <div class="form-group" style="margin-bottom:0;min-width:120px">
+        <label>级别</label>
+        <select id="alert-filter-level"><option value="">全部</option><option value="critical">紧急</option><option value="error">错误</option><option value="warning">警告</option><option value="info">信息</option></select>
+      </div>
+      <div class="form-group" style="margin-bottom:0;min-width:140px">
+        <label>分类</label>
+        <select id="alert-filter-category"><option value="">全部</option><option value="consecutive_ng">连续NG</option><option value="surface_defect">表面缺陷</option><option value="contamination">污染</option><option value="shape_defect">形状缺陷</option><option value="structure_defect">结构缺陷</option><option value="missing_part">缺失</option></select>
+      </div>
+      <div class="form-group" style="margin-bottom:0;min-width:120px">
+        <label>等级</label>
+        <select id="alert-filter-grade"><option value="">全部</option><option value="urgent">紧急</option><option value="normal">普通</option></select>
+      </div>
+      <div class="form-group" style="margin-bottom:0;min-width:120px">
+        <label>确认状态</label>
+        <select id="alert-filter-ack"><option value="">全部</option><option value="false">未确认</option><option value="true">已确认</option></select>
+      </div>
+      <button class="btn btn-primary btn-sm" id="btn-alert-search">查询</button>
+      <button class="btn btn-outline btn-sm" id="btn-alert-export">导出CSV</button>
+      <button class="btn btn-danger btn-sm" id="btn-alert-ack-all">全部确认</button>
+    </div>
+  </div>
+  <div style="overflow-x:auto">
+    <table class="results-table" id="alert-history-table">
+      <thead>
+        <tr>
+          <th>时间</th>
+          <th>级别</th>
+          <th>等级</th>
+          <th>分类</th>
+          <th>消息</th>
+          <th>动作</th>
+          <th>确认</th>
+          <th>操作</th>
+        </tr>
+      </thead>
+      <tbody id="alert-history-body">
+        <tr><td colspan="8" class="empty-state" style="padding:30px">加载中...</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-top:12px">
+    <span id="alert-page-info" style="font-size:12px;color:var(--text-muted)">-</span>
+    <div style="display:flex;gap:8px">
+      <button class="btn btn-outline btn-sm" id="btn-alert-prev">上一页</button>
+      <button class="btn btn-outline btn-sm" id="btn-alert-next">下一页</button>
+    </div>
+  </div>
+  <div class="param-section" style="margin-top:20px">
+    <h4>通知通道配置</h4>
+    <div id="notification-config-area">
+      <div style="display:flex;flex-wrap:wrap;gap:16px;margin-top:12px" id="notify-channel-status"></div>
+    </div>
   </div>
 </section>
 
@@ -519,6 +585,7 @@ function switchTab(tabName) {
   else if (tabName === 'dashboard') initDashboardTab();
   else if (tabName === 'params') initParamsTab();
   else if (tabName === 'health') initHealthTab();
+  else if (tabName === 'alerts') initAlertsTab();
   else if (tabName === 'admin') initAdminTab();
 }
 
@@ -845,6 +912,14 @@ function initHealthTab() {
   healthRefreshTimer = setInterval(loadHealth, 15000);
 }
 
+function initAlertsTab() {
+  loadAlertHistory();
+  loadAlertStats();
+  healthRefreshTimer = setInterval(function() {
+    loadAlertStats();
+  }, 10000);
+}
+
 function loadHealth() {
   apiGet('/health').then(function(data) {
     var checks = data.checks || data.health || [];
@@ -994,6 +1069,160 @@ window.addEventListener('resize', function() {
   if (yieldTrendChart) yieldTrendChart.resize();
   if (defectDistChart) defectDistChart.resize();
   if (avgTimeChart) avgTimeChart.resize();
+});
+
+var alertPage = 0;
+var alertPageSize = 20;
+var alertTotal = 0;
+
+function loadAlertHistory() {
+  var level = document.getElementById('alert-filter-level').value;
+  var category = document.getElementById('alert-filter-category').value;
+  var grade = document.getElementById('alert-filter-grade').value;
+  var ack = document.getElementById('alert-filter-ack').value;
+  var params = '?limit=' + alertPageSize + '&offset=' + (alertPage * alertPageSize);
+  if (level) params += '&level=' + level;
+  if (category) params += '&category=' + category;
+  if (grade) params += '&grade=' + grade;
+  if (ack) params += '&acknowledged=' + ack;
+
+  var opts = {};
+  if (token) opts.headers = { 'Authorization': 'Bearer ' + token };
+  fetch('/api/alerts/history' + params, opts).then(function(r) { return r.json(); }).then(function(data) {
+    alertTotal = data.total || 0;
+    var alerts = data.alerts || [];
+    var tbody = document.getElementById('alert-history-body');
+    if (!alerts.length) {
+      tbody.innerHTML = '<tr><td colspan="8" class="empty-state" style="padding:30px">暂无告警记录</td></tr>';
+    } else {
+      tbody.innerHTML = '';
+      alerts.forEach(function(a) {
+        var tr = document.createElement('tr');
+        var levelClass = a.level === 'critical' ? 'color:var(--red);font-weight:700' : a.level === 'error' ? 'color:var(--orange);font-weight:600' : a.level === 'warning' ? 'color:var(--yellow)' : 'color:var(--text-secondary)';
+        var gradeLabel = a.grade === 'urgent' ? '<span style="color:var(--red);font-weight:600">紧急</span>' : '<span style="color:var(--text-secondary)">普通</span>';
+        var ackLabel = a.acknowledged ? '<span style="color:var(--green)">已确认</span>' : '<span style="color:var(--red)">未确认</span>';
+        var ackBtn = a.acknowledged ? '' : '<button class="btn btn-sm btn-outline" onclick="ackAlert(\'' + a.alert_id + '\')">确认</button>';
+        var ts = a.timestamp ? new Date(a.timestamp * 1000).toLocaleString('zh-CN') : '-';
+        tr.innerHTML = '<td style="white-space:nowrap;font-size:12px">' + ts + '</td>' +
+          '<td style="' + levelClass + '">' + (a.level || '-') + '</td>' +
+          '<td>' + gradeLabel + '</td>' +
+          '<td style="font-size:12px">' + (a.category || '-') + '</td>' +
+          '<td style="max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px" title="' + (a.message || '') + '">' + (a.message || '-') + '</td>' +
+          '<td style="font-size:12px">' + (a.action || '-') + '</td>' +
+          '<td>' + ackLabel + '</td>' +
+          '<td>' + ackBtn + '</td>';
+        tbody.appendChild(tr);
+      });
+    }
+    document.getElementById('alert-page-info').textContent = '共 ' + alertTotal + ' 条，第 ' + (alertPage + 1) + '/' + Math.max(1, Math.ceil(alertTotal / alertPageSize)) + ' 页';
+  }).catch(function(e) { console.error('Load alert history error:', e); });
+}
+
+function loadAlertStats() {
+  var opts = {};
+  if (token) opts.headers = { 'Authorization': 'Bearer ' + token };
+  fetch('/api/alerts/pending-urgent', opts).then(function(r) { return r.json(); }).then(function(data) {
+    document.getElementById('alert-pending-count').textContent = data.count || 0;
+  }).catch(function() {});
+  fetch('/api/alerts/relay-state', opts).then(function(r) { return r.json(); }).then(function(data) {
+    var state = data.relay_state || '-';
+    var el = document.getElementById('alert-relay-state');
+    el.textContent = state;
+    el.style.color = state === 'red' ? 'var(--red)' : state === 'yellow' ? 'var(--yellow)' : 'var(--green)';
+  }).catch(function() {});
+  fetch('/api/alerts/notification/config', opts).then(function(r) { return r.json(); }).then(function(data) {
+    var el = document.getElementById('alert-notify-status');
+    if (data.enabled) {
+      var channels = Object.keys(data.channels || {}).filter(function(k) { return data.channels[k].enabled; });
+      el.textContent = channels.length ? channels.join(', ') : '已启用(无通道)';
+      el.style.color = 'var(--green)';
+    } else {
+      el.textContent = '未启用';
+      el.style.color = 'var(--text-muted)';
+    }
+    var statusArea = document.getElementById('notify-channel-status');
+    if (statusArea && data.channels) {
+      statusArea.innerHTML = '';
+      Object.keys(data.channels).forEach(function(name) {
+        var ch = data.channels[name];
+        var div = document.createElement('div');
+        div.style.cssText = 'background:var(--bg-card);padding:12px 16px;border-radius:6px;min-width:180px';
+        div.innerHTML = '<div style="font-weight:600;font-size:13px;margin-bottom:4px">' + ch.name + '</div>' +
+          '<div style="font-size:12px;color:' + (ch.enabled ? 'var(--green)' : 'var(--text-muted)') + '">' + (ch.enabled ? '已启用' : '未启用') + '</div>';
+        statusArea.appendChild(div);
+      });
+    }
+  }).catch(function() {});
+}
+
+function ackAlert(alertId) {
+  var opts = {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ alert_id: alertId })
+  };
+  if (token) opts.headers['Authorization'] = 'Bearer ' + token;
+  fetch('/api/alerts/acknowledge', opts).then(function(r) { return r.json(); }).then(function(data) {
+    if (data.success) {
+      loadAlertHistory();
+      loadAlertStats();
+    } else {
+      alert('确认失败');
+    }
+  }).catch(function(e) { alert('确认失败: ' + e.message); });
+}
+
+document.getElementById('btn-alert-search').addEventListener('click', function() {
+  alertPage = 0;
+  loadAlertHistory();
+});
+
+document.getElementById('btn-alert-export').addEventListener('click', function() {
+  var level = document.getElementById('alert-filter-level').value;
+  var category = document.getElementById('alert-filter-category').value;
+  var grade = document.getElementById('alert-filter-grade').value;
+  var ack = document.getElementById('alert-filter-ack').value;
+  var body = {};
+  if (level) body.level = level;
+  if (category) body.category = category;
+  if (grade) body.grade = grade;
+  if (ack) body.acknowledged = ack === 'true';
+  var opts = {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  };
+  if (token) opts.headers['Authorization'] = 'Bearer ' + token;
+  fetch('/api/alerts/export', opts).then(function(r) { return r.json(); }).then(function(data) {
+    if (data.file) {
+      window.open('/api/data-management/download?file=' + encodeURIComponent(data.file), '_blank');
+    } else {
+      alert('导出失败');
+    }
+  }).catch(function(e) { alert('导出失败: ' + e.message); });
+});
+
+document.getElementById('btn-alert-ack-all').addEventListener('click', function() {
+  if (!confirm('确认所有紧急告警？')) return;
+  var opts = {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({})
+  };
+  if (token) opts.headers['Authorization'] = 'Bearer ' + token;
+  fetch('/api/alerts/acknowledge-all', opts).then(function(r) { return r.json(); }).then(function(data) {
+    alert('已确认 ' + (data.acknowledged_count || 0) + ' 条告警');
+    loadAlertHistory();
+    loadAlertStats();
+  }).catch(function(e) { alert('操作失败: ' + e.message); });
+});
+
+document.getElementById('btn-alert-prev').addEventListener('click', function() {
+  if (alertPage > 0) { alertPage--; loadAlertHistory(); }
+});
+
+document.getElementById('btn-alert-next').addEventListener('click', function() {
+  if ((alertPage + 1) * alertPageSize < alertTotal) { alertPage++; loadAlertHistory(); }
 });
 
 tryAutoLogin();

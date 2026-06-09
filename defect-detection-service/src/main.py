@@ -125,14 +125,58 @@ class DefectDetectionService:
 
         consecutive_threshold = self.config_manager.get_consecutive_ng_threshold()
         auto_stop_line = self.config_manager.get_auto_stop_line()
+        alert_config = self.config_manager.get_alert_config()
+
+        self.notification_dispatcher = None
+        try:
+            from src.notification.dispatcher import NotificationDispatcher
+            notification_config = self.config_manager.get_notification_config()
+            if notification_config.get("enable", False):
+                self.notification_dispatcher = NotificationDispatcher(notification_config)
+                logger.info("Notification dispatcher initialized")
+        except ImportError:
+            logger.warning("Notification module not available")
 
         self.alert_manager = AlertManager(
             max_history=1000,
             plc_connector=self.plc_connector,
             action_logger=self.action_logger,
             consecutive_ng_threshold=consecutive_threshold,
-            auto_stop_line=auto_stop_line
+            auto_stop_line=auto_stop_line,
+            notification_dispatcher=self.notification_dispatcher,
+            alert_config=alert_config
         )
+
+        if self.data_management_manager and alert_config.get("alert_history_db_enabled", True):
+            try:
+                record_store = self.data_management_manager.record_store
+                if record_store and record_store._enabled:
+                    from src.alert_manager import AlertGrade
+
+                    def _on_alert_event(event_data):
+                        try:
+                            if isinstance(event_data, dict) and event_data.get("event") == "acknowledge":
+                                record_store.update_alert_acknowledged(
+                                    event_data["alert_id"],
+                                    event_data.get("operator", "system")
+                                )
+                                return
+                        except Exception:
+                            pass
+
+                        try:
+                            if hasattr(event_data, 'to_dict'):
+                                alert_dict = event_data.to_dict()
+                                grade = self.alert_manager._grade_alert(event_data)
+                                alert_dict["grade"] = grade.value
+                                record_store.save_alert_event(alert_dict)
+                        except Exception as e:
+                            logger.warning(f"Failed to persist alert event: {e}")
+
+                    self.alert_manager.register_event_callback(_on_alert_event)
+                    logger.info("Alert event DB persistence enabled")
+            except Exception as e:
+                logger.warning(f"Failed to setup alert event persistence: {e}")
 
         self.production_tracker = None
         if PRODUCTION_TRACKER_AVAILABLE:
@@ -553,7 +597,73 @@ class DefectDetectionService:
                         limit = int(params.get("limit", [100])[0])
                         level = params.get("level", [None])[0]
                         alerts = service.alert_manager.get_recent_alerts(limit, level)
-                        self._send_json(200, {"alerts": [a.__dict__ for a in alerts]})
+                        self._send_json(200, {"alerts": [a.to_dict() for a in alerts]})
+
+                    elif path == "/api/alerts/history":
+                        user = self._require_auth("view")
+                        if not user:
+                            self._send_json(401, {"error": "Authentication required"})
+                        else:
+                            level = params.get("level", [None])[0]
+                            category = params.get("category", [None])[0]
+                            grade = params.get("grade", [None])[0]
+                            ack_str = params.get("acknowledged", [None])[0]
+                            acknowledged = None
+                            if ack_str is not None:
+                                acknowledged = ack_str.lower() == "true"
+                            start_time = params.get("start_time", [None])[0]
+                            end_time = params.get("end_time", [None])[0]
+                            limit_val = int(params.get("limit", [100])[0])
+                            offset_val = int(params.get("offset", [0])[0])
+                            start_f = float(start_time) if start_time else None
+                            end_f = float(end_time) if end_time else None
+
+                            if service.data_management_manager and service.data_management_manager.record_store._enabled:
+                                records = service.data_management_manager.record_store.query_alert_events(
+                                    level=level, category=category, grade=grade,
+                                    acknowledged=acknowledged, start_time=start_f, end_time=end_f,
+                                    limit=limit_val, offset=offset_val
+                                )
+                                total = service.data_management_manager.record_store.count_alert_events(
+                                    level=level, category=category, grade=grade,
+                                    acknowledged=acknowledged, start_time=start_f, end_time=end_f
+                                )
+                                self._send_json(200, {"alerts": records, "total": total, "limit": limit_val, "offset": offset_val})
+                            else:
+                                alerts = service.alert_manager.get_alert_history(
+                                    limit=limit_val, level=level, category=category,
+                                    grade=grade, acknowledged=acknowledged,
+                                    start_time=start_f, end_time=end_f
+                                )
+                                self._send_json(200, {"alerts": alerts, "total": len(alerts), "limit": limit_val, "offset": offset_val})
+
+                    elif path == "/api/alerts/pending-urgent":
+                        user = self._require_auth("view")
+                        if not user:
+                            self._send_json(401, {"error": "Authentication required"})
+                        else:
+                            pending = service.alert_manager.get_pending_urgent_alerts()
+                            self._send_json(200, {"alerts": pending, "count": len(pending)})
+
+                    elif path == "/api/alerts/relay-state":
+                        user = self._require_auth("view")
+                        if not user:
+                            self._send_json(401, {"error": "Authentication required"})
+                        else:
+                            self._send_json(200, {
+                                "relay_state": service.alert_manager.get_relay_state(),
+                                "stop_line_active": service.alert_manager.stop_line_active
+                            })
+
+                    elif path == "/api/alerts/notification/config":
+                        user = self._require_auth("full_config")
+                        if not user:
+                            self._send_json(401, {"error": "Authentication required"})
+                        else:
+                            if service.notification_dispatcher:
+                                self._send_json(200, service.notification_dispatcher.get_config())
+                            else:
+                                self._send_json(200, {"enabled": False})
 
                     elif path == "/api/stats":
                         self._send_json(200, service._get_stats())
@@ -1045,10 +1155,109 @@ class DefectDetectionService:
                         if not user:
                             self._send_json(401, {"error": "Authentication required"})
                         else:
-                            operator = data.get("operator", "system")
+                            operator = data.get("operator", user.get("username", "system"))
                             reason = data.get("reason", "手动重置")
                             service.alert_manager.reset_stop_line(operator=operator, reason=reason)
                             self._send_json(200, {"status": "reset", "operator": operator, "reason": reason})
+
+                    elif path == "/api/alerts/acknowledge":
+                        user = self._require_write_auth("view")
+                        if not user:
+                            self._send_json(401, {"error": "Authentication required"})
+                        else:
+                            alert_id = data.get("alert_id", "")
+                            if not alert_id:
+                                self._send_json(400, {"error": "Missing alert_id"})
+                            else:
+                                operator = data.get("operator", user.get("username", "system"))
+                                success = service.alert_manager.acknowledge_alert(alert_id, operator=operator)
+                                self._send_json(200, {"success": success, "alert_id": alert_id})
+
+                    elif path == "/api/alerts/acknowledge-all":
+                        user = self._require_write_auth("view")
+                        if not user:
+                            self._send_json(401, {"error": "Authentication required"})
+                        else:
+                            operator = data.get("operator", user.get("username", "system"))
+                            pending = service.alert_manager.get_pending_urgent_alerts()
+                            count = 0
+                            for a in pending:
+                                aid = a.get("alert_id", "")
+                                if aid and service.alert_manager.acknowledge_alert(aid, operator=operator):
+                                    count += 1
+                            self._send_json(200, {"success": True, "acknowledged_count": count})
+
+                    elif path == "/api/alerts/export":
+                        user = self._require_auth("view")
+                        if not user:
+                            self._send_json(401, {"error": "Authentication required"})
+                        else:
+                            import csv
+                            import io
+                            import tempfile
+
+                            level = data.get("level")
+                            category = data.get("category")
+                            grade = data.get("grade")
+                            acknowledged = data.get("acknowledged")
+                            start_time = data.get("start_time")
+                            end_time = data.get("end_time")
+
+                            if service.data_management_manager and service.data_management_manager.record_store._enabled:
+                                alerts = service.data_management_manager.record_store.query_alert_events(
+                                    level=level, category=category, grade=grade,
+                                    acknowledged=acknowledged, start_time=start_time, end_time=end_time,
+                                    limit=10000
+                                )
+                            else:
+                                alerts = service.alert_manager.get_alert_history(
+                                    limit=10000, level=level, category=category,
+                                    grade=grade, acknowledged=acknowledged
+                                )
+
+                            output = io.StringIO()
+                            if alerts:
+                                fieldnames = list(alerts[0].keys())
+                                writer = csv.DictWriter(output, fieldnames=fieldnames)
+                                writer.writeheader()
+                                for row in alerts:
+                                    clean_row = {}
+                                    for k, v in row.items():
+                                        if isinstance(v, dict):
+                                            clean_row[k] = json.dumps(v, ensure_ascii=False)
+                                        elif isinstance(v, list):
+                                            clean_row[k] = json.dumps(v, ensure_ascii=False)
+                                        else:
+                                            clean_row[k] = v
+                                    writer.writerow(clean_row)
+
+                            tmp = tempfile.NamedTemporaryFile(
+                                mode='w', suffix='.csv', delete=False,
+                                dir=service.config_manager.get_data_management_config().get("export", {}).get("temp_dir", "./data/export_temp"),
+                                encoding='utf-8-sig'
+                            )
+                            tmp.write(output.getvalue())
+                            tmp.close()
+                            self._send_json(200, {
+                                "file": os.path.basename(tmp.name),
+                                "count": len(alerts)
+                            })
+
+                    elif path == "/api/alerts/notification/receivers":
+                        user = self._require_write_auth("full_config")
+                        if not user:
+                            self._send_json(401, {"error": "Authentication required"})
+                        elif not service.notification_dispatcher or not service.notification_dispatcher.enabled:
+                            self._send_json(400, {"error": "Notification not available"})
+                        else:
+                            group_name = data.get("group", "")
+                            channel_name = data.get("channel", "")
+                            receivers = data.get("receivers", [])
+                            if not group_name or not channel_name:
+                                self._send_json(400, {"error": "Missing group or channel"})
+                            else:
+                                service.notification_dispatcher.update_receivers(group_name, channel_name, receivers)
+                                self._send_json(200, {"success": True})
 
                     elif path == "/api/plc/command/reject":
                         user = self._require_write_auth("manual_override")

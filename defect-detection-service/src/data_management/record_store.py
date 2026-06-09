@@ -1,5 +1,6 @@
 from typing import Dict, Any, Optional, List, Tuple
 import threading
+import time
 import json
 from datetime import datetime
 
@@ -94,6 +95,32 @@ class RecordStore:
                 cur.execute("CREATE INDEX IF NOT EXISTS idx_dr_product_model ON detection_records(product_model)")
                 cur.execute("CREATE INDEX IF NOT EXISTS idx_dr_detection_id ON detection_records(detection_id)")
                 cur.execute("CREATE INDEX IF NOT EXISTS idx_dr_created_at ON detection_records(created_at)")
+
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS alert_events (
+                        alert_id TEXT PRIMARY KEY,
+                        level TEXT,
+                        category TEXT,
+                        message TEXT,
+                        source TEXT,
+                        action TEXT,
+                        grade TEXT,
+                        timestamp DOUBLE PRECISION,
+                        detection_id TEXT,
+                        defect_id TEXT,
+                        acknowledged BOOLEAN DEFAULT FALSE,
+                        acknowledged_by TEXT,
+                        acknowledged_at DOUBLE PRECISION,
+                        details JSONB,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    )
+                """)
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_ae_level ON alert_events(level)")
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_ae_category ON alert_events(category)")
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_ae_grade ON alert_events(grade)")
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_ae_timestamp ON alert_events(timestamp)")
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_ae_acknowledged ON alert_events(acknowledged)")
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_ae_created_at ON alert_events(created_at)")
                 conn.commit()
                 cur.close()
                 logger.info("PostgreSQL detection_records table ensured with indexes")
@@ -355,6 +382,182 @@ class RecordStore:
             except Exception as e:
                 logger.error(f"Failed to get distinct values for {column}: {e}", exc_info=True)
                 return []
+            finally:
+                self._put_conn(conn)
+
+    def save_alert_event(self, alert_data: Dict[str, Any]) -> bool:
+        if not self._enabled or not self._pool:
+            return False
+
+        with self._lock:
+            conn = self._get_conn()
+            if not conn:
+                return False
+            try:
+                cur = conn.cursor()
+                cur.execute("""
+                    INSERT INTO alert_events
+                    (alert_id, level, category, message, source, action, grade,
+                     timestamp, detection_id, defect_id, acknowledged, acknowledged_by,
+                     acknowledged_at, details)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (alert_id) DO UPDATE SET
+                        acknowledged = EXCLUDED.acknowledged,
+                        acknowledged_by = EXCLUDED.acknowledged_by,
+                        acknowledged_at = EXCLUDED.acknowledged_at
+                """, (
+                    alert_data.get("alert_id", ""),
+                    alert_data.get("level", ""),
+                    alert_data.get("category", ""),
+                    alert_data.get("message", ""),
+                    alert_data.get("source", ""),
+                    alert_data.get("action", ""),
+                    alert_data.get("grade", ""),
+                    alert_data.get("timestamp", 0.0),
+                    alert_data.get("detection_id", ""),
+                    alert_data.get("defect_id", ""),
+                    alert_data.get("acknowledged", False),
+                    alert_data.get("acknowledged_by"),
+                    alert_data.get("acknowledged_at"),
+                    json.dumps(alert_data.get("details", {}), ensure_ascii=False, default=str)
+                ))
+                conn.commit()
+                return True
+            except Exception as e:
+                logger.error(f"Failed to save alert event: {e}", exc_info=True)
+                conn.rollback()
+                return False
+            finally:
+                self._put_conn(conn)
+
+    def query_alert_events(self, level: Optional[str] = None,
+                           category: Optional[str] = None,
+                           grade: Optional[str] = None,
+                           acknowledged: Optional[bool] = None,
+                           start_time: Optional[float] = None,
+                           end_time: Optional[float] = None,
+                           limit: int = 100,
+                           offset: int = 0) -> List[Dict[str, Any]]:
+        if not self._enabled or not self._pool:
+            return []
+
+        with self._lock:
+            conn = self._get_conn()
+            if not conn:
+                return []
+            try:
+                conditions = []
+                params = []
+                if level:
+                    conditions.append("level = %s")
+                    params.append(level)
+                if category:
+                    conditions.append("category = %s")
+                    params.append(category)
+                if grade:
+                    conditions.append("grade = %s")
+                    params.append(grade)
+                if acknowledged is not None:
+                    conditions.append("acknowledged = %s")
+                    params.append(acknowledged)
+                if start_time:
+                    conditions.append("timestamp >= %s")
+                    params.append(start_time)
+                if end_time:
+                    conditions.append("timestamp <= %s")
+                    params.append(end_time)
+
+                where_clause = " AND ".join(conditions) if conditions else "1=1"
+                params.extend([limit, offset])
+
+                cur = conn.cursor(cursor_factory=RealDictCursor)
+                cur.execute(f"""
+                    SELECT * FROM alert_events
+                    WHERE {where_clause}
+                    ORDER BY timestamp DESC
+                    LIMIT %s OFFSET %s
+                """, params)
+                rows = cur.fetchall()
+                for row in rows:
+                    if isinstance(row.get("details"), str):
+                        try:
+                            row["details"] = json.loads(row["details"])
+                        except:
+                            pass
+                return [dict(row) for row in rows]
+            except Exception as e:
+                logger.error(f"Failed to query alert events: {e}", exc_info=True)
+                return []
+            finally:
+                self._put_conn(conn)
+
+    def update_alert_acknowledged(self, alert_id: str, operator: str) -> bool:
+        if not self._enabled or not self._pool:
+            return False
+
+        with self._lock:
+            conn = self._get_conn()
+            if not conn:
+                return False
+            try:
+                cur = conn.cursor()
+                cur.execute("""
+                    UPDATE alert_events
+                    SET acknowledged = TRUE, acknowledged_by = %s, acknowledged_at = %s
+                    WHERE alert_id = %s
+                """, (operator, time.time(), alert_id))
+                conn.commit()
+                return cur.rowcount > 0
+            except Exception as e:
+                logger.error(f"Failed to update alert acknowledged: {e}", exc_info=True)
+                conn.rollback()
+                return False
+            finally:
+                self._put_conn(conn)
+
+    def count_alert_events(self, level: Optional[str] = None,
+                           category: Optional[str] = None,
+                           grade: Optional[str] = None,
+                           acknowledged: Optional[bool] = None,
+                           start_time: Optional[float] = None,
+                           end_time: Optional[float] = None) -> int:
+        if not self._enabled or not self._pool:
+            return 0
+
+        with self._lock:
+            conn = self._get_conn()
+            if not conn:
+                return 0
+            try:
+                conditions = []
+                params = []
+                if level:
+                    conditions.append("level = %s")
+                    params.append(level)
+                if category:
+                    conditions.append("category = %s")
+                    params.append(category)
+                if grade:
+                    conditions.append("grade = %s")
+                    params.append(grade)
+                if acknowledged is not None:
+                    conditions.append("acknowledged = %s")
+                    params.append(acknowledged)
+                if start_time:
+                    conditions.append("timestamp >= %s")
+                    params.append(start_time)
+                if end_time:
+                    conditions.append("timestamp <= %s")
+                    params.append(end_time)
+
+                where_clause = " AND ".join(conditions) if conditions else "1=1"
+
+                cur = conn.cursor()
+                cur.execute(f"SELECT COUNT(*) FROM alert_events WHERE {where_clause}", params)
+                return cur.fetchone()[0]
+            except Exception as e:
+                logger.error(f"Failed to count alert events: {e}", exc_info=True)
+                return 0
             finally:
                 self._put_conn(conn)
 
