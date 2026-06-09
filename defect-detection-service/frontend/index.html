@@ -1,0 +1,1202 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>缺陷数据管理系统</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+:root {
+  --bg-primary: #0f1923;
+  --bg-secondary: #1a2736;
+  --bg-card: #1e2d3d;
+  --bg-input: #253545;
+  --border: #2d4a5e;
+  --text-primary: #e8edf2;
+  --text-secondary: #8fa3b5;
+  --text-muted: #5c7a91;
+  --accent: #3b9ff5;
+  --accent-hover: #5bb0ff;
+  --green: #2ecc71;
+  --green-bg: rgba(46, 204, 113, 0.15);
+  --red: #e74c3c;
+  --red-bg: rgba(231, 76, 60, 0.15);
+  --orange: #f39c12;
+  --purple: #9b59b6;
+  --shadow: 0 2px 12px rgba(0,0,0,0.3);
+  --radius: 8px;
+}
+html, body { height: 100%; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", sans-serif;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  line-height: 1.6;
+}
+.app-header {
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border);
+  padding: 14px 24px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+.app-header h1 {
+  font-size: 18px;
+  font-weight: 600;
+  letter-spacing: 1px;
+}
+.app-header .status-dot {
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  background: var(--green);
+  display: inline-block;
+  margin-left: 8px;
+}
+.tab-nav {
+  display: flex;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border);
+  padding: 0 24px;
+}
+.tab-btn {
+  padding: 12px 24px;
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  font-size: 14px;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  transition: all 0.2s;
+}
+.tab-btn:hover { color: var(--text-primary); }
+.tab-btn.active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+.tab-content { display: none; padding: 20px 24px; height: calc(100vh - 110px); overflow-y: auto; }
+.tab-content.active { display: block; }
+.filter-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: flex-end;
+  background: var(--bg-card);
+  padding: 16px;
+  border-radius: var(--radius);
+  margin-bottom: 20px;
+}
+.filter-group { display: flex; flex-direction: column; gap: 4px; }
+.filter-group label {
+  font-size: 12px;
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+.filter-group select,
+.filter-group input {
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  color: var(--text-primary);
+  padding: 8px 12px;
+  border-radius: 6px;
+  font-size: 13px;
+  min-width: 160px;
+  outline: none;
+  transition: border-color 0.2s;
+}
+.filter-group select:focus,
+.filter-group input:focus {
+  border-color: var(--accent);
+}
+.filter-group input[type="datetime-local"] { min-width: 200px; }
+.btn {
+  padding: 8px 20px;
+  border: none;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+.btn-primary {
+  background: var(--accent);
+  color: #fff;
+}
+.btn-primary:hover { background: var(--accent-hover); }
+.btn-success {
+  background: var(--green);
+  color: #fff;
+}
+.btn-success:hover { background: #27ae60; }
+.btn-danger {
+  background: var(--red);
+  color: #fff;
+}
+.btn-danger:hover { background: #c0392b; }
+.btn-warning {
+  background: var(--orange);
+  color: #fff;
+}
+.btn-warning:hover { background: #e67e22; }
+.btn-outline {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+}
+.btn-outline:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.results-table {
+  width: 100%;
+  border-collapse: collapse;
+  background: var(--bg-card);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.results-table th {
+  background: var(--bg-input);
+  padding: 10px 14px;
+  text-align: left;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  border-bottom: 1px solid var(--border);
+}
+.results-table td {
+  padding: 10px 14px;
+  font-size: 13px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: middle;
+}
+.results-table tbody tr {
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.results-table tbody tr:hover {
+  background: rgba(59, 159, 245, 0.08);
+}
+.thumbnail-cell {
+  width: 60px;
+  height: 45px;
+}
+.thumbnail-cell img {
+  width: 60px;
+  height: 45px;
+  object-fit: cover;
+  border-radius: 4px;
+  background: var(--bg-input);
+}
+.badge {
+  display: inline-block;
+  padding: 2px 10px;
+  border-radius: 12px;
+  font-size: 12px;
+  font-weight: 600;
+}
+.badge-ok {
+  background: var(--green-bg);
+  color: var(--green);
+}
+.badge-ng {
+  background: var(--red-bg);
+  color: var(--red);
+}
+.pagination {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 0;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+.pagination-buttons {
+  display: flex;
+  gap: 8px;
+}
+.modal-overlay {
+  display: none;
+  position: fixed;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background: rgba(0,0,0,0.7);
+  z-index: 1000;
+  align-items: center;
+  justify-content: center;
+}
+.modal-overlay.show { display: flex; }
+.modal {
+  background: var(--bg-secondary);
+  border-radius: var(--radius);
+  max-width: 900px;
+  width: 90%;
+  max-height: 85vh;
+  overflow-y: auto;
+  box-shadow: var(--shadow);
+}
+.modal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--border);
+}
+.modal-header h3 { font-size: 16px; }
+.modal-close {
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  font-size: 22px;
+  cursor: pointer;
+  line-height: 1;
+}
+.modal-close:hover { color: var(--text-primary); }
+.modal-body { padding: 20px; }
+.detail-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 12px;
+  margin-bottom: 20px;
+}
+.detail-item label {
+  display: block;
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-bottom: 2px;
+}
+.detail-item span {
+  font-size: 14px;
+  font-weight: 500;
+}
+.image-compare {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+.image-compare .image-panel {
+  text-align: center;
+}
+.image-compare .image-panel h4 {
+  font-size: 13px;
+  color: var(--text-secondary);
+  margin-bottom: 8px;
+}
+.image-compare .image-panel img {
+  max-width: 100%;
+  max-height: 400px;
+  border-radius: 6px;
+  background: var(--bg-input);
+}
+.stats-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 16px;
+  margin-bottom: 24px;
+}
+.stat-card {
+  background: var(--bg-card);
+  border-radius: var(--radius);
+  padding: 20px;
+  border-left: 4px solid var(--accent);
+}
+.stat-card.green { border-left-color: var(--green); }
+.stat-card.red { border-left-color: var(--red); }
+.stat-card.orange { border-left-color: var(--orange); }
+.stat-card.purple { border-left-color: var(--purple); }
+.stat-card .stat-label {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-bottom: 6px;
+}
+.stat-card .stat-value {
+  font-size: 28px;
+  font-weight: 700;
+}
+.stat-card .stat-sub {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-top: 4px;
+}
+.charts-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 20px;
+  margin-bottom: 20px;
+}
+.chart-card {
+  background: var(--bg-card);
+  border-radius: var(--radius);
+  padding: 20px;
+}
+.chart-card h4 {
+  font-size: 14px;
+  margin-bottom: 16px;
+  color: var(--text-secondary);
+}
+.chart-card.full-width {
+  grid-column: 1 / -1;
+}
+.chart-container {
+  position: relative;
+  width: 100%;
+  min-height: 280px;
+}
+.export-section {
+  background: var(--bg-card);
+  border-radius: var(--radius);
+  padding: 20px;
+  margin-bottom: 20px;
+}
+.export-section h4 {
+  font-size: 14px;
+  margin-bottom: 16px;
+  color: var(--text-secondary);
+}
+.export-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 12px;
+}
+.export-result {
+  margin-top: 16px;
+  padding: 12px 16px;
+  border-radius: 6px;
+  font-size: 13px;
+  display: none;
+}
+.export-result.success {
+  display: block;
+  background: var(--green-bg);
+  color: var(--green);
+}
+.export-result.error {
+  display: block;
+  background: var(--red-bg);
+  color: var(--red);
+}
+.export-result a {
+  color: var(--accent);
+  text-decoration: underline;
+}
+.interval-selector {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 16px;
+}
+.interval-btn {
+  padding: 6px 14px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-secondary);
+  border-radius: 4px;
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.interval-btn.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+.checkbox-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+.checkbox-group input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--accent);
+}
+.loading-spinner {
+  display: inline-block;
+  width: 16px;
+  height: 16px;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.6s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+.empty-state {
+  text-align: center;
+  padding: 60px 20px;
+  color: var(--text-muted);
+}
+.empty-state .icon { font-size: 48px; margin-bottom: 12px; }
+.empty-state p { font-size: 14px; }
+@media (max-width: 768px) {
+  .filter-bar { flex-direction: column; }
+  .filter-group select,
+  .filter-group input { min-width: 100%; }
+  .charts-grid { grid-template-columns: 1fr; }
+  .image-compare { grid-template-columns: 1fr; }
+  .stats-cards { grid-template-columns: 1fr 1fr; }
+}
+</style>
+</head>
+<body>
+
+<header class="app-header">
+  <h1>缺陷数据管理系统<span class="status-dot"></span></h1>
+</header>
+
+<nav class="tab-nav">
+  <button class="tab-btn active" data-tab="search">检索查询</button>
+  <button class="tab-btn" data-tab="stats">统计分析</button>
+  <button class="tab-btn" data-tab="export">批量导出</button>
+</nav>
+
+<section class="tab-content active" id="tab-search">
+  <div class="filter-bar" id="search-filter">
+    <div class="filter-group">
+      <label>产品型号</label>
+      <select id="s-product-model"><option value="">全部</option></select>
+    </div>
+    <div class="filter-group">
+      <label>开始时间</label>
+      <input type="datetime-local" id="s-start-time">
+    </div>
+    <div class="filter-group">
+      <label>结束时间</label>
+      <input type="datetime-local" id="s-end-time">
+    </div>
+    <div class="filter-group">
+      <label>缺陷类型</label>
+      <select id="s-defect-type"><option value="">全部</option></select>
+    </div>
+    <div class="filter-group">
+      <label>检测结果</label>
+      <select id="s-result">
+        <option value="">全部</option>
+        <option value="OK">OK</option>
+        <option value="NG">NG</option>
+      </select>
+    </div>
+    <button class="btn btn-primary" id="btn-search">搜索</button>
+  </div>
+
+  <div id="search-results">
+    <div class="empty-state">
+      <div class="icon">&#128269;</div>
+      <p>请设置筛选条件后点击搜索</p>
+    </div>
+  </div>
+
+  <div class="pagination" id="search-pagination" style="display:none;">
+    <span id="page-info"></span>
+    <div class="pagination-buttons">
+      <button class="btn btn-outline" id="btn-prev" disabled>上一页</button>
+      <button class="btn btn-outline" id="btn-next" disabled>下一页</button>
+    </div>
+  </div>
+</section>
+
+<section class="tab-content" id="tab-stats">
+  <div class="filter-bar" id="stats-filter">
+    <div class="filter-group">
+      <label>产品型号</label>
+      <select id="st-product-model"><option value="">全部</option></select>
+    </div>
+    <div class="filter-group">
+      <label>开始时间</label>
+      <input type="datetime-local" id="st-start-time">
+    </div>
+    <div class="filter-group">
+      <label>结束时间</label>
+      <input type="datetime-local" id="st-end-time">
+    </div>
+    <button class="btn btn-primary" id="btn-stats-refresh">刷新统计</button>
+  </div>
+
+  <div class="stats-cards" id="overview-cards">
+    <div class="stat-card">
+      <div class="stat-label">检测总数</div>
+      <div class="stat-value" id="ov-total">-</div>
+    </div>
+    <div class="stat-card green">
+      <div class="stat-label">OK数量</div>
+      <div class="stat-value" id="ov-ok">-</div>
+    </div>
+    <div class="stat-card red">
+      <div class="stat-label">NG数量</div>
+      <div class="stat-value" id="ov-ng">-</div>
+    </div>
+    <div class="stat-card orange">
+      <div class="stat-label">良品率</div>
+      <div class="stat-value" id="ov-yield">-</div>
+      <div class="stat-sub" id="ov-top-defect"></div>
+    </div>
+  </div>
+
+  <div class="charts-grid">
+    <div class="chart-card full-width">
+      <h4>良率趋势</h4>
+      <div class="interval-selector" id="interval-selector">
+        <button class="interval-btn active" data-interval="hour">按小时</button>
+        <button class="interval-btn" data-interval="day">按天</button>
+        <button class="interval-btn" data-interval="shift">按班次</button>
+      </div>
+      <div class="chart-container">
+        <canvas id="chart-yield"></canvas>
+      </div>
+    </div>
+    <div class="chart-card">
+      <h4>缺陷类型分布</h4>
+      <div class="chart-container">
+        <canvas id="chart-defect-dist"></canvas>
+      </div>
+    </div>
+    <div class="chart-card">
+      <h4>产品NG排名 (Top 10)</h4>
+      <div class="chart-container">
+        <canvas id="chart-ranking"></canvas>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="tab-content" id="tab-export">
+  <div class="filter-bar" id="export-filter">
+    <div class="filter-group">
+      <label>产品型号</label>
+      <select id="ex-product-model"><option value="">全部</option></select>
+    </div>
+    <div class="filter-group">
+      <label>开始时间</label>
+      <input type="datetime-local" id="ex-start-time">
+    </div>
+    <div class="filter-group">
+      <label>结束时间</label>
+      <input type="datetime-local" id="ex-end-time">
+    </div>
+    <div class="filter-group">
+      <label>缺陷类型</label>
+      <select id="ex-defect-type"><option value="">全部</option></select>
+    </div>
+    <div class="filter-group">
+      <label>检测结果</label>
+      <select id="ex-result">
+        <option value="">全部</option>
+        <option value="OK">OK</option>
+        <option value="NG">NG</option>
+      </select>
+    </div>
+  </div>
+
+  <div class="export-section">
+    <h4>导出选项</h4>
+    <div class="checkbox-group">
+      <input type="checkbox" id="ex-use-search">
+      <label for="ex-use-search">使用当前搜索结果 (先搜索，再导出匹配的检测ID)</label>
+    </div>
+    <div class="export-buttons">
+      <button class="btn btn-primary" id="btn-export-images">导出图像 (ZIP)</button>
+      <button class="btn btn-success" id="btn-export-records">导出记录 (CSV)</button>
+      <button class="btn btn-warning" id="btn-export-all">导出全部 (ZIP)</button>
+    </div>
+    <div class="export-result" id="export-result"></div>
+  </div>
+</section>
+
+<div class="modal-overlay" id="detail-modal">
+  <div class="modal">
+    <div class="modal-header">
+      <h3 id="modal-title">检测详情</h3>
+      <button class="modal-close" id="modal-close">&times;</button>
+    </div>
+    <div class="modal-body" id="modal-body">
+      <div class="detail-grid" id="detail-grid"></div>
+      <div class="image-compare" id="detail-images"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+const API_BASE = '/api/data-management';
+let searchOffset = 0;
+let searchLimit = 50;
+let searchTotalCount = 0;
+let yieldTrendChart = null;
+let defectDistChart = null;
+let rankingChart = null;
+let currentInterval = 'hour';
+let collectedDetectionIds = [];
+
+const chartColors = [
+  '#3b9ff5','#2ecc71','#e74c3c','#f39c12','#9b59b6',
+  '#1abc9c','#e67e22','#3498db','#e91e63','#00bcd4'
+];
+
+function formatTimestamp(ts) {
+  if (!ts) return '-';
+  const d = new Date(ts * 1000);
+  const pad = n => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+}
+
+function toUnixSeconds(datetimeLocalValue) {
+  if (!datetimeLocalValue) return '';
+  const d = new Date(datetimeLocalValue);
+  if (isNaN(d.getTime())) return '';
+  return Math.floor(d.getTime() / 1000).toString();
+}
+
+async function apiGet(path) {
+  const res = await fetch(API_BASE + path);
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: res.statusText }));
+    throw new Error(err.error || `HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
+async function apiPost(path, body) {
+  const res = await fetch(API_BASE + path, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: res.statusText }));
+    throw new Error(err.error || `HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
+async function loadSuggestions() {
+  try {
+    const data = await apiGet('/suggestions');
+    populateSelect('s-product-model', data.product_models);
+    populateSelect('st-product-model', data.product_models);
+    populateSelect('ex-product-model', data.product_models);
+    populateSelect('s-defect-type', data.defect_types);
+    populateSelect('ex-defect-type', data.defect_types);
+  } catch (e) {
+    console.error('Failed to load suggestions:', e);
+  }
+}
+
+function populateSelect(id, items) {
+  const sel = document.getElementById(id);
+  if (!sel || !items) return;
+  const first = sel.options[0];
+  sel.innerHTML = '';
+  sel.appendChild(first);
+  items.forEach(item => {
+    const opt = document.createElement('option');
+    opt.value = item;
+    opt.textContent = item;
+    sel.appendChild(opt);
+  });
+}
+
+function getSearchFilterParams(prefix) {
+  const pfx = prefix || 's';
+  const productModel = document.getElementById(`${pfx}-product-model`).value;
+  const startTime = toUnixSeconds(document.getElementById(`${pfx}-start-time`).value);
+  const endTime = toUnixSeconds(document.getElementById(`${pfx}-end-time`).value);
+  const defectType = document.getElementById(`${pfx}-defect-type`) ? document.getElementById(`${pfx}-defect-type`).value : '';
+  const result = document.getElementById(`${pfx}-result`) ? document.getElementById(`${pfx}-result`).value : '';
+  return { product_model: productModel, start_time: startTime, end_time: endTime, defect_type: defectType, result: result };
+}
+
+async function doSearch() {
+  const f = getSearchFilterParams('s');
+  const params = new URLSearchParams({
+    product_model: f.product_model,
+    start_time: f.start_time,
+    end_time: f.end_time,
+    defect_type: f.defect_type,
+    result: f.result,
+    limit: searchLimit.toString(),
+    offset: searchOffset.toString()
+  });
+
+  try {
+    const data = await apiGet('/search?' + params.toString());
+    searchTotalCount = data.total_count || 0;
+    renderSearchResults(data.records || []);
+    renderPagination();
+    collectedDetectionIds = (data.records || []).map(r => r.detection_id);
+  } catch (e) {
+    document.getElementById('search-results').innerHTML =
+      `<div class="empty-state"><div class="icon">&#9888;</div><p>搜索失败: ${e.message}</p></div>`;
+  }
+}
+
+function renderSearchResults(records) {
+  if (!records.length) {
+    document.getElementById('search-results').innerHTML =
+      `<div class="empty-state"><div class="icon">&#128196;</div><p>没有找到匹配的记录</p></div>`;
+    return;
+  }
+
+  let html = `<table class="results-table"><thead><tr>
+    <th>缩略图</th><th>检测ID</th><th>产品型号</th><th>结果</th>
+    <th>缺陷类型</th><th>时间</th><th>推理耗时</th>
+  </tr></thead><tbody>`;
+
+  records.forEach(r => {
+    const badgeClass = r.result === 'OK' ? 'badge-ok' : 'badge-ng';
+    const thumbSrc = r.thumbnail_base64 ? `data:image/jpeg;base64,${r.thumbnail_base64}` : '';
+    html += `<tr data-detection-id="${r.detection_id}">
+      <td class="thumbnail-cell">${thumbSrc ? `<img src="${thumbSrc}" alt="thumb">` : '<div style="width:60px;height:45px;background:var(--bg-input);border-radius:4px;"></div>'}</td>
+      <td style="font-family:monospace;font-size:12px;">${r.detection_id || '-'}</td>
+      <td>${r.product_model || '-'}</td>
+      <td><span class="badge ${badgeClass}">${r.result || '-'}</span></td>
+      <td style="font-size:12px;">${r.defect_types || '-'}</td>
+      <td style="font-size:12px;">${formatTimestamp(r.timestamp)}</td>
+      <td>${r.inference_time_ms != null ? r.inference_time_ms.toFixed(1) + ' ms' : '-'}</td>
+    </tr>`;
+  });
+
+  html += '</tbody></table>';
+  document.getElementById('search-results').innerHTML = html;
+
+  document.querySelectorAll('#search-results tbody tr').forEach(tr => {
+    tr.addEventListener('click', () => showDetail(tr.dataset.detectionId));
+  });
+}
+
+function renderPagination() {
+  const pag = document.getElementById('search-pagination');
+  if (searchTotalCount === 0) { pag.style.display = 'none'; return; }
+  pag.style.display = 'flex';
+  const from = searchOffset + 1;
+  const to = Math.min(searchOffset + searchLimit, searchTotalCount);
+  document.getElementById('page-info').textContent = `显示 ${from}-${to} / 共 ${searchTotalCount} 条`;
+  document.getElementById('btn-prev').disabled = searchOffset <= 0;
+  document.getElementById('btn-next').disabled = searchOffset + searchLimit >= searchTotalCount;
+}
+
+async function showDetail(detectionId) {
+  const modal = document.getElementById('detail-modal');
+  const grid = document.getElementById('detail-grid');
+  const images = document.getElementById('detail-images');
+  document.getElementById('modal-title').textContent = '检测详情 - ' + detectionId;
+  grid.innerHTML = '<div style="grid-column:1/-1;text-align:center;"><div class="loading-spinner"></div> 加载中...</div>';
+  images.innerHTML = '';
+  modal.classList.add('show');
+
+  try {
+    const data = await apiGet('/record?detection_id=' + encodeURIComponent(detectionId));
+    const fields = [
+      { label: '检测ID', key: 'detection_id' },
+      { label: '序列号', key: 'sequence_id' },
+      { label: '产品ID', key: 'product_id' },
+      { label: '产品名称', key: 'product_name' },
+      { label: '产品型号', key: 'product_model' },
+      { label: '产品批次', key: 'product_batch' },
+      { label: '检测结果', key: 'result' },
+      { label: '缺陷类型', key: 'defect_types' },
+      { label: '缺陷数量', key: 'defect_count' },
+      { label: '推理耗时', key: 'inference_time_ms', format: v => v != null ? v.toFixed(1) + ' ms' : '-' },
+      { label: '模型版本', key: 'model_version' },
+      { label: '检测时间', key: 'timestamp', format: formatTimestamp },
+      { label: '产线ID', key: 'line_id' },
+      { label: '工站ID', key: 'station_id' },
+      { label: '相机ID', key: 'camera_id' }
+    ];
+    grid.innerHTML = '';
+    fields.forEach(f => {
+      const val = data[f.key];
+      const display = f.format ? f.format(val) : (val != null ? val : '-');
+      const isResult = f.key === 'result';
+      const badgeClass = isResult && val === 'OK' ? 'badge-ok' : (isResult && val === 'NG' ? 'badge-ng' : '');
+      grid.innerHTML += `<div class="detail-item"><label>${f.label}</label><span>${isResult ? `<span class="badge ${badgeClass}">${display}</span>` : display}</span></div>`;
+    });
+
+    images.innerHTML = '';
+    if (data.original_image_base64) {
+      images.innerHTML += `<div class="image-panel"><h4>原始图像</h4><img src="data:image/jpeg;base64,${data.original_image_base64}" alt="original"></div>`;
+    }
+    if (data.annotated_image_base64) {
+      images.innerHTML += `<div class="image-panel"><h4>标注图像</h4><img src="data:image/jpeg;base64,${data.annotated_image_base64}" alt="annotated"></div>`;
+    }
+  } catch (e) {
+    grid.innerHTML = `<div style="grid-column:1/-1;color:var(--red);">加载失败: ${e.message}</div>`;
+  }
+}
+
+async function loadOverview() {
+  const startTime = toUnixSeconds(document.getElementById('st-start-time').value);
+  const endTime = toUnixSeconds(document.getElementById('st-end-time').value);
+  const params = new URLSearchParams();
+  if (startTime) params.set('start_time', startTime);
+  if (endTime) params.set('end_time', endTime);
+
+  try {
+    const data = await apiGet('/statistics/overview?' + params.toString());
+    document.getElementById('ov-total').textContent = data.total_records != null ? data.total_records.toLocaleString() : '-';
+    document.getElementById('ov-ok').textContent = data.ok_count != null ? data.ok_count.toLocaleString() : '-';
+    document.getElementById('ov-ng').textContent = data.ng_count != null ? data.ng_count.toLocaleString() : '-';
+    document.getElementById('ov-yield').textContent = data.yield_rate != null ? data.yield_rate.toFixed(2) + '%' : '-';
+    document.getElementById('ov-top-defect').textContent = data.top_defect_type ? '主要缺陷: ' + data.top_defect_type : '';
+  } catch (e) {
+    console.error('Failed to load overview:', e);
+  }
+}
+
+async function loadYieldTrend() {
+  const startTime = toUnixSeconds(document.getElementById('st-start-time').value);
+  const endTime = toUnixSeconds(document.getElementById('st-end-time').value);
+  const params = new URLSearchParams({ interval: currentInterval });
+  if (startTime) params.set('start_time', startTime);
+  if (endTime) params.set('end_time', endTime);
+
+  try {
+    const data = await apiGet('/statistics/yield-trend?' + params.toString());
+    const labels = data.trend.map(t => t.period);
+    const values = data.trend.map(t => t.yield_rate);
+
+    if (yieldTrendChart) yieldTrendChart.destroy();
+    yieldTrendChart = new Chart(document.getElementById('chart-yield'), {
+      type: 'line',
+      data: {
+        labels,
+        datasets: [{
+          label: '良品率 (%)',
+          data: values,
+          borderColor: '#3b9ff5',
+          backgroundColor: 'rgba(59,159,245,0.1)',
+          fill: true,
+          tension: 0.3,
+          pointRadius: 3,
+          pointBackgroundColor: '#3b9ff5'
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        scales: {
+          y: {
+            min: 0,
+            max: 100,
+            ticks: { color: '#8fa3b5', callback: v => v + '%' },
+            grid: { color: 'rgba(45,74,94,0.4)' }
+          },
+          x: {
+            ticks: { color: '#8fa3b5', maxRotation: 45, font: { size: 10 } },
+            grid: { color: 'rgba(45,74,94,0.2)' }
+          }
+        },
+        plugins: {
+          legend: { labels: { color: '#e8edf2' } },
+          tooltip: { callbacks: { label: ctx => `良品率: ${ctx.parsed.y.toFixed(2)}%` } }
+        }
+      }
+    });
+  } catch (e) {
+    console.error('Failed to load yield trend:', e);
+  }
+}
+
+async function loadDefectDistribution() {
+  const startTime = toUnixSeconds(document.getElementById('st-start-time').value);
+  const endTime = toUnixSeconds(document.getElementById('st-end-time').value);
+  const params = new URLSearchParams();
+  if (startTime) params.set('start_time', startTime);
+  if (endTime) params.set('end_time', endTime);
+
+  try {
+    const data = await apiGet('/statistics/defect-distribution?' + params.toString());
+    const labels = data.distribution.map(d => d.defect_type);
+    const values = data.distribution.map(d => d.count);
+
+    if (defectDistChart) defectDistChart.destroy();
+    defectDistChart = new Chart(document.getElementById('chart-defect-dist'), {
+      type: 'doughnut',
+      data: {
+        labels,
+        datasets: [{
+          data: values,
+          backgroundColor: chartColors.slice(0, labels.length),
+          borderColor: '#1e2d3d',
+          borderWidth: 2
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: {
+            position: 'right',
+            labels: { color: '#e8edf2', padding: 12, font: { size: 12 } }
+          },
+          tooltip: {
+            callbacks: {
+              label: ctx => {
+                const item = data.distribution[ctx.dataIndex];
+                return `${item.defect_type}: ${item.count} (${item.percentage}%)`;
+              }
+            }
+          }
+        }
+      }
+    });
+  } catch (e) {
+    console.error('Failed to load defect distribution:', e);
+  }
+}
+
+async function loadProductRanking() {
+  const startTime = toUnixSeconds(document.getElementById('st-start-time').value);
+  const endTime = toUnixSeconds(document.getElementById('st-end-time').value);
+  const params = new URLSearchParams({ top_n: '10' });
+  if (startTime) params.set('start_time', startTime);
+  if (endTime) params.set('end_time', endTime);
+
+  try {
+    const data = await apiGet('/statistics/product-ranking?' + params.toString());
+    const labels = data.ranking.map(r => r.product_name || r.product_id);
+    const values = data.ranking.map(r => r.ng_count);
+
+    if (rankingChart) rankingChart.destroy();
+    rankingChart = new Chart(document.getElementById('chart-ranking'), {
+      type: 'bar',
+      data: {
+        labels,
+        datasets: [{
+          label: 'NG数量',
+          data: values,
+          backgroundColor: 'rgba(231,76,60,0.7)',
+          borderColor: '#e74c3c',
+          borderWidth: 1,
+          borderRadius: 4
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        indexAxis: 'y',
+        scales: {
+          x: {
+            ticks: { color: '#8fa3b5' },
+            grid: { color: 'rgba(45,74,94,0.3)' }
+          },
+          y: {
+            ticks: { color: '#8fa3b5', font: { size: 11 } },
+            grid: { color: 'rgba(45,74,94,0.15)' }
+          }
+        },
+        plugins: {
+          legend: { labels: { color: '#e8edf2' } }
+        }
+      }
+    });
+  } catch (e) {
+    console.error('Failed to load product ranking:', e);
+  }
+}
+
+function loadAllStats() {
+  loadOverview();
+  loadYieldTrend();
+  loadDefectDistribution();
+  loadProductRanking();
+}
+
+async function collectDetectionIdsForExport() {
+  const useSearch = document.getElementById('ex-use-search').checked;
+  if (useSearch && collectedDetectionIds.length > 0) {
+    return collectedDetectionIds;
+  }
+  const f = getExportFilterParams();
+  const params = new URLSearchParams({
+    product_model: f.product_model,
+    start_time: f.start_time,
+    end_time: f.end_time,
+    defect_type: f.defect_type,
+    result: f.result,
+    limit: '10000',
+    offset: '0'
+  });
+  try {
+    const data = await apiGet('/search?' + params.toString());
+    return (data.records || []).map(r => r.detection_id);
+  } catch (e) {
+    return [];
+  }
+}
+
+function getExportFilterParams() {
+  const productModel = document.getElementById('ex-product-model').value;
+  const startTime = toUnixSeconds(document.getElementById('ex-start-time').value);
+  const endTime = toUnixSeconds(document.getElementById('ex-end-time').value);
+  const defectType = document.getElementById('ex-defect-type').value;
+  const result = document.getElementById('ex-result').value;
+  return { product_model: productModel, start_time: startTime, end_time: endTime, defect_type: defectType, result: result };
+}
+
+function showExportResult(success, message, filePath) {
+  const el = document.getElementById('export-result');
+  el.className = 'export-result ' + (success ? 'success' : 'error');
+  if (success && filePath) {
+    const downloadUrl = `${API_BASE}/download?file=${encodeURIComponent(filePath)}`;
+    el.innerHTML = `${message} <a href="${downloadUrl}" target="_blank">点击下载</a>`;
+  } else {
+    el.textContent = message;
+  }
+}
+
+function setExportButtonsDisabled(disabled) {
+  document.getElementById('btn-export-images').disabled = disabled;
+  document.getElementById('btn-export-records').disabled = disabled;
+  document.getElementById('btn-export-all').disabled = disabled;
+}
+
+async function exportImages() {
+  setExportButtonsDisabled(true);
+  showExportResult(false, '');
+  try {
+    const detectionIds = await collectDetectionIdsForExport();
+    if (!detectionIds.length) {
+      showExportResult(false, '没有可导出的检测记录');
+      setExportButtonsDisabled(false);
+      return;
+    }
+    const data = await apiPost('/export/images', { detection_ids: detectionIds });
+    if (data.file_path) {
+      showExportResult(true, '图像导出成功!', data.file_path);
+    } else {
+      showExportResult(false, '导出失败: 未生成文件');
+    }
+  } catch (e) {
+    showExportResult(false, '导出失败: ' + e.message);
+  }
+  setExportButtonsDisabled(false);
+}
+
+async function exportRecords() {
+  setExportButtonsDisabled(true);
+  showExportResult(false, '');
+  try {
+    const useSearch = document.getElementById('ex-use-search').checked;
+    const f = getExportFilterParams();
+    const body = {};
+    if (useSearch) {
+      const detectionIds = await collectDetectionIdsForExport();
+      body.detection_ids = detectionIds;
+    } else {
+      if (f.start_time) body.start_time = f.start_time;
+      if (f.end_time) body.end_time = f.end_time;
+      if (f.result) body.result = f.result;
+      if (f.defect_type) body.defect_type = f.defect_type;
+    }
+    const data = await apiPost('/export/records', body);
+    if (data.file_path) {
+      showExportResult(true, '记录导出成功!', data.file_path);
+    } else {
+      showExportResult(false, '导出失败: 未生成文件');
+    }
+  } catch (e) {
+    showExportResult(false, '导出失败: ' + e.message);
+  }
+  setExportButtonsDisabled(false);
+}
+
+async function exportAll() {
+  setExportButtonsDisabled(true);
+  showExportResult(false, '');
+  try {
+    const useSearch = document.getElementById('ex-use-search').checked;
+    const f = getExportFilterParams();
+    const body = {};
+    if (useSearch) {
+      const detectionIds = await collectDetectionIdsForExport();
+      body.detection_ids = detectionIds;
+    } else {
+      if (f.start_time) body.start_time = f.start_time;
+      if (f.end_time) body.end_time = f.end_time;
+      if (f.result) body.result = f.result;
+      if (f.defect_type) body.defect_type = f.defect_type;
+    }
+    const data = await apiPost('/export/all', body);
+    if (data.file_path) {
+      showExportResult(true, '全部导出成功!', data.file_path);
+    } else {
+      showExportResult(false, '导出失败: 未生成文件');
+    }
+  } catch (e) {
+    showExportResult(false, '导出失败: ' + e.message);
+  }
+  setExportButtonsDisabled(false);
+}
+
+document.querySelectorAll('.tab-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+    btn.classList.add('active');
+    document.getElementById('tab-' + btn.dataset.tab).classList.add('active');
+    if (btn.dataset.tab === 'stats') {
+      loadAllStats();
+    }
+  });
+});
+
+document.getElementById('btn-search').addEventListener('click', () => {
+  searchOffset = 0;
+  doSearch();
+});
+
+document.getElementById('btn-prev').addEventListener('click', () => {
+  searchOffset = Math.max(0, searchOffset - searchLimit);
+  doSearch();
+});
+
+document.getElementById('btn-next').addEventListener('click', () => {
+  searchOffset += searchLimit;
+  doSearch();
+});
+
+document.getElementById('modal-close').addEventListener('click', () => {
+  document.getElementById('detail-modal').classList.remove('show');
+});
+
+document.getElementById('detail-modal').addEventListener('click', (e) => {
+  if (e.target === document.getElementById('detail-modal')) {
+    document.getElementById('detail-modal').classList.remove('show');
+  }
+});
+
+document.getElementById('btn-stats-refresh').addEventListener('click', loadAllStats);
+
+document.querySelectorAll('#interval-selector .interval-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('#interval-selector .interval-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    currentInterval = btn.dataset.interval;
+    loadYieldTrend();
+  });
+});
+
+document.getElementById('btn-export-images').addEventListener('click', exportImages);
+document.getElementById('btn-export-records').addEventListener('click', exportRecords);
+document.getElementById('btn-export-all').addEventListener('click', exportAll);
+
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') {
+    document.getElementById('detail-modal').classList.remove('show');
+  }
+});
+
+loadSuggestions();
+</script>
+</body>
+</html>

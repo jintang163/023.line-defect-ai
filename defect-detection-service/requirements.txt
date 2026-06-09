@@ -10,6 +10,12 @@ requests>=2.31.0
 onnxruntime>=1.16.0
 onnxruntime-gpu>=1.16.0; sys_platform != 'darwin'
 
+# PostgreSQL
+psycopg2-binary>=2.9.9
+
+# MinIO
+minio>=7.2.0
+
 # Optional GPU acceleration
 # tensorrt>=8.6.0
 # pycuda>=2022.1

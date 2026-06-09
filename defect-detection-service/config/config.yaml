@@ -118,6 +118,32 @@ monitoring:
   enable_tracing: false
   jaeger_endpoint: ""
 
+system_monitor:
+  enable: true
+  auth:
+    enable: true
+    secret_key: "defect-detection-jwt-secret-2024"
+    token_expire_hours: 8
+    users:
+      - username: "operator"
+        password: "operator123"
+        role: "operator"
+      - username: "engineer"
+        password: "engineer123"
+        role: "engineer"
+      - username: "admin"
+        password: "admin123"
+        role: "admin"
+  health_check:
+    enable: true
+    check_interval_sec: 30
+    auto_restart: true
+    restart_cooldown_sec: 60
+    disk_threshold_percent: 90
+    gpu_threshold_percent: 95
+    mq_backlog_threshold: 1000
+    camera_timeout_sec: 10
+
 api:
   host: "0.0.0.0"
   port: 8081
@@ -129,13 +155,19 @@ data_management:
   enable: true
   record_storage:
     enable: true
-    sqlite_db_dir: "./data/detection_records"
+    host: "postgres"
+    port: 5432
+    database: "defect_db"
+    user: "defect"
+    password: "defect123"
+    min_connections: 2
+    max_connections: 10
   image_archive:
     enable: true
-    storage_type: "local"
+    storage_type: "minio"
     local_dir: "./data/defect_images"
     minio:
-      endpoint: "localhost:9000"
+      endpoint: "minio:9000"
       access_key: "minioadmin"
       secret_key: "minioadmin"
       bucket: "defect-images"

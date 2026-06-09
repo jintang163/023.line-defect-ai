@@ -90,3 +90,6 @@ class ConfigManager:
 
     def get_data_management_config(self) -> Dict[str, Any]:
         return self._config.get("data_management", {})
+
+    def get_system_monitor_config(self) -> Dict[str, Any]:
+        return self._config.get("system_monitor", {})

@@ -16,6 +16,7 @@ class DataQuery:
                limit=50, offset=0) -> Dict[str, Any]:
         records, total_count = self.record_store.query_records(
             product_id=product_id,
+            product_model=product_model,
             start_time=start_time,
             end_time=end_time,
             result=result,
@@ -23,9 +24,6 @@ class DataQuery:
             limit=limit,
             offset=offset
         )
-
-        if product_model:
-            records = [r for r in records if r.get("product_model") == product_model]
 
         for record in records:
             thumbnail_base64 = None
@@ -84,31 +82,49 @@ class DataQuery:
         return record
 
     def get_search_suggestions(self) -> Dict[str, Any]:
-        product_ids = set()
-        product_models = set()
-        defect_types = set()
+        product_ids = []
+        product_models = []
+        defect_types = []
 
         try:
-            records, _ = self.record_store.query_records(limit=10000)
-            for record in records:
-                pid = record.get("product_id", "")
-                pm = record.get("product_model", "")
-                dt = record.get("defect_types", "")
-
-                if pid:
-                    product_ids.add(pid)
-                if pm:
-                    product_models.add(pm)
-                if dt:
-                    for d in dt.split(","):
-                        d = d.strip()
-                        if d:
-                            defect_types.add(d)
+            if hasattr(self.record_store, 'get_distinct_values'):
+                product_ids = self.record_store.get_distinct_values("product_id")
+                product_models = self.record_store.get_distinct_values("product_model")
+                raw_defect_types = self.record_store.get_distinct_values("defect_types")
+                defect_set = set()
+                for dt_str in raw_defect_types:
+                    if dt_str:
+                        for d in dt_str.split(","):
+                            d = d.strip()
+                            if d:
+                                defect_set.add(d)
+                defect_types = sorted(list(defect_set))
+            else:
+                records, _ = self.record_store.query_records(limit=10000)
+                pid_set = set()
+                pm_set = set()
+                dt_set = set()
+                for record in records:
+                    pid = record.get("product_id", "")
+                    pm = record.get("product_model", "")
+                    dt = record.get("defect_types", "")
+                    if pid:
+                        pid_set.add(pid)
+                    if pm:
+                        pm_set.add(pm)
+                    if dt:
+                        for d in dt.split(","):
+                            d = d.strip()
+                            if d:
+                                dt_set.add(d)
+                product_ids = sorted(list(pid_set))
+                product_models = sorted(list(pm_set))
+                defect_types = sorted(list(dt_set))
         except Exception as e:
             logger.error(f"Failed to get search suggestions: {e}")
 
         return {
-            "product_ids": sorted(list(product_ids)),
-            "product_models": sorted(list(product_models)),
-            "defect_types": sorted(list(defect_types))
+            "product_ids": product_ids,
+            "product_models": product_models,
+            "defect_types": defect_types
         }

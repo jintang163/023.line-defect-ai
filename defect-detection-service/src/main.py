@@ -66,6 +66,12 @@ try:
 except ImportError:
     DATA_MANAGEMENT_AVAILABLE = False
 
+try:
+    from src.system_monitor import SystemMonitorManager
+    SYSTEM_MONITOR_AVAILABLE = True
+except ImportError:
+    SYSTEM_MONITOR_AVAILABLE = False
+
 logger = Logger("defect-detection-service", "INFO", "./logs/defect-detection.log").logger
 
 
@@ -164,8 +170,25 @@ class DefectDetectionService:
             else:
                 logger.info("数据管理与追溯模块已禁用")
 
+        self.system_monitor_manager = None
+
         self.message_consumer = MessageConsumer(msg_config)
         self.result_producer = ResultProducer(msg_config)
+
+        if SYSTEM_MONITOR_AVAILABLE:
+            sm_config = self.config_manager.get_system_monitor_config()
+            if sm_config.get("enable", False):
+                self.system_monitor_manager = SystemMonitorManager(
+                    config=sm_config,
+                    algorithm_manager=self.algorithm_manager,
+                    config_manager=self.config_manager,
+                    message_consumer=self.message_consumer,
+                    result_producer=self.result_producer,
+                    data_management_manager=self.data_management_manager
+                )
+                logger.info("✅ 系统配置与监控模块已启用")
+            else:
+                logger.info("系统配置与监控模块已禁用")
 
         logger.info("All components initialized")
 
@@ -302,6 +325,9 @@ class DefectDetectionService:
         self.result_producer.connect()
         self.message_consumer.start()
 
+        if self.system_monitor_manager and self.system_monitor_manager.enabled:
+            self.system_monitor_manager.start()
+
         self._start_http_server()
 
         self._is_running = True
@@ -329,6 +355,10 @@ class DefectDetectionService:
         if self.data_management_manager:
             self.data_management_manager.close()
             logger.info("Data management manager stopped")
+
+        if self.system_monitor_manager:
+            self.system_monitor_manager.stop()
+            logger.info("System monitor manager stopped")
 
         if self._yield_db_conn:
             try:
@@ -403,6 +433,14 @@ class DefectDetectionService:
                     annotated_image=annotated
                 )
 
+            if self.system_monitor_manager and self.system_monitor_manager.enabled:
+                try:
+                    _, frame_encoded = cv2.imencode('.jpg', annotated, [cv2.IMWRITE_JPEG_QUALITY, 80])
+                    camera_id = image_data.camera_id or "default"
+                    self.system_monitor_manager.update_annotated_frame(camera_id, frame_encoded.tobytes())
+                except Exception:
+                    pass
+
             self.result_producer.send_result(detection_output, annotated)
 
             result_icon = "✓" if detection_output.result.value == "OK" else "✗"
@@ -467,7 +505,16 @@ class DefectDetectionService:
                 params = parse_qs(parsed.query)
 
                 try:
-                    if path == "/health":
+                    if path == "/" or path == "/index.html":
+                        self._serve_static_file("frontend/index.html", "text/html")
+
+                    elif path == "/monitor" or path == "/monitor.html":
+                        self._serve_static_file("frontend/monitor.html", "text/html")
+
+                    elif path.startswith("/frontend/"):
+                        self._serve_frontend_file(path)
+
+                    elif path == "/health":
                         self._send_json(200, {"status": "ok", "running": service._is_running})
 
                     elif path == "/api/status":
@@ -731,6 +778,81 @@ class DefectDetectionService:
                         else:
                             self._send_json(400, {"error": "Data management not available"})
 
+                    elif path == "/api/data-management/download":
+                        file_path_param = params.get("file", [None])[0]
+                        if not file_path_param:
+                            self._send_json(400, {"error": "Missing file parameter"})
+                        elif not os.path.exists(file_path_param):
+                            self._send_json(404, {"error": "File not found"})
+                        else:
+                            self._serve_download_file(file_path_param)
+
+                    elif path == "/api/monitor/health":
+                        if service.system_monitor_manager and service.system_monitor_manager.enabled:
+                            self._send_json(200, service.system_monitor_manager.get_health_status())
+                        else:
+                            self._send_json(400, {"error": "System monitor not available"})
+
+                    elif path == "/api/monitor/health/history":
+                        if service.system_monitor_manager and service.system_monitor_manager.enabled:
+                            limit = int(params.get("limit", [100])[0])
+                            history = service.system_monitor_manager.health_checker.get_history(limit)
+                            self._send_json(200, {"history": history})
+                        else:
+                            self._send_json(400, {"error": "System monitor not available"})
+
+                    elif path == "/api/monitor/frame":
+                        camera_id = params.get("camera_id", ["default"])[0]
+                        if service.system_monitor_manager and service.system_monitor_manager.enabled:
+                            frame_data = service.system_monitor_manager.get_latest_frame(camera_id)
+                            if frame_data:
+                                self.send_response(200)
+                                self.send_header("Content-Type", "image/jpeg")
+                                self.send_header("Cache-Control", "no-cache")
+                                self.end_headers()
+                                self.wfile.write(frame_data)
+                            else:
+                                self._send_json(404, {"error": "No frame available"})
+                        else:
+                            self._send_json(400, {"error": "System monitor not available"})
+
+                    elif path == "/api/monitor/cameras":
+                        if service.system_monitor_manager and service.system_monitor_manager.enabled:
+                            self._send_json(200, {"cameras": service.system_monitor_manager.get_all_camera_ids()})
+                        else:
+                            self._send_json(400, {"error": "System monitor not available"})
+
+                    elif path == "/api/monitor/dashboard":
+                        if service.system_monitor_manager and service.system_monitor_manager.enabled:
+                            self._send_json(200, service.system_monitor_manager.get_history_dashboard_data())
+                        else:
+                            self._send_json(400, {"error": "System monitor not available"})
+
+                    elif path == "/api/monitor/params":
+                        if service.system_monitor_manager and service.system_monitor_manager.enabled:
+                            product_id = params.get("product_id", [None])[0]
+                            if product_id and service.system_monitor_manager.param_adjuster:
+                                params_data = service.system_monitor_manager.param_adjuster.get_product_params(product_id)
+                                self._send_json(200, params_data or {})
+                            else:
+                                self._send_json(400, {"error": "Missing product_id"})
+                        else:
+                            self._send_json(400, {"error": "System monitor not available"})
+
+                    elif path == "/api/monitor/params/log":
+                        if service.system_monitor_manager and service.system_monitor_manager.enabled:
+                            limit = int(params.get("limit", [100])[0])
+                            log = service.system_monitor_manager.param_adjuster.get_change_log(limit)
+                            self._send_json(200, {"change_log": log})
+                        else:
+                            self._send_json(400, {"error": "System monitor not available"})
+
+                    elif path == "/api/monitor/users":
+                        if service.system_monitor_manager and service.system_monitor_manager.enabled:
+                            self._send_json(200, {"users": service.system_monitor_manager.role_manager.list_users()})
+                        else:
+                            self._send_json(400, {"error": "System monitor not available"})
+
                     else:
                         self._send_json(404, {"error": "Not found"})
 
@@ -963,6 +1085,109 @@ class DefectDetectionService:
                         else:
                             self._send_json(500, {"error": "Export failed"})
 
+                    elif path == "/api/monitor/auth/login":
+                        if service.system_monitor_manager and service.system_monitor_manager.enabled:
+                            username = data.get("username", "")
+                            password = data.get("password", "")
+                            token = service.system_monitor_manager.authenticate(username, password)
+                            if token:
+                                user_info = service.system_monitor_manager.verify_token(token)
+                                self._send_json(200, {"token": token, "user": user_info})
+                            else:
+                                self._send_json(401, {"error": "Invalid credentials"})
+                        else:
+                            self._send_json(400, {"error": "System monitor not available"})
+
+                    elif path == "/api/monitor/auth/verify":
+                        token = data.get("token", "")
+                        if service.system_monitor_manager and service.system_monitor_manager.enabled:
+                            user_info = service.system_monitor_manager.verify_token(token)
+                            if user_info:
+                                self._send_json(200, {"valid": True, "user": user_info})
+                            else:
+                                self._send_json(200, {"valid": False})
+                        else:
+                            self._send_json(400, {"error": "System monitor not available"})
+
+                    elif path == "/api/monitor/auth/users":
+                        if service.system_monitor_manager and service.system_monitor_manager.enabled:
+                            action = data.get("action", "list")
+                            if action == "add":
+                                username = data.get("username", "")
+                                password = data.get("password", "")
+                                role = data.get("role", "operator")
+                                if username and password:
+                                    success = service.system_monitor_manager.role_manager.add_user(username, password, role)
+                                    self._send_json(200, {"success": success})
+                                else:
+                                    self._send_json(400, {"error": "Missing username or password"})
+                            elif action == "remove":
+                                username = data.get("username", "")
+                                if username:
+                                    success = service.system_monitor_manager.role_manager.remove_user(username)
+                                    self._send_json(200, {"success": success})
+                                else:
+                                    self._send_json(400, {"error": "Missing username"})
+                            else:
+                                users = service.system_monitor_manager.role_manager.list_users()
+                                self._send_json(200, {"users": users})
+                        else:
+                            self._send_json(400, {"error": "System monitor not available"})
+
+                    elif path == "/api/monitor/params/adjust":
+                        if service.system_monitor_manager and service.system_monitor_manager.enabled:
+                            product_id = data.get("product_id", "")
+                            param_path = data.get("param_path", "")
+                            new_value = data.get("new_value")
+                            operator = data.get("operator", "system")
+                            token = data.get("token", "")
+                            if not product_id or not param_path or new_value is None:
+                                self._send_json(400, {"error": "Missing product_id, param_path, or new_value"})
+                            elif token and not service.system_monitor_manager.check_permission(token, "adjust_params"):
+                                self._send_json(403, {"error": "Permission denied"})
+                            else:
+                                success = service.system_monitor_manager.param_adjuster.adjust_product_param(
+                                    product_id, param_path, new_value, operator
+                                )
+                                self._send_json(200, {"success": success})
+                        else:
+                            self._send_json(400, {"error": "System monitor not available"})
+
+                    elif path == "/api/monitor/params/threshold":
+                        if service.system_monitor_manager and service.system_monitor_manager.enabled:
+                            product_id = data.get("product_id", "")
+                            defect_type = data.get("defect_type", "")
+                            field = data.get("field", "")
+                            new_value = data.get("new_value")
+                            operator = data.get("operator", "system")
+                            if not all([product_id, defect_type, field, new_value is not None]):
+                                self._send_json(400, {"error": "Missing required fields"})
+                            else:
+                                success = service.system_monitor_manager.param_adjuster.adjust_threshold(
+                                    product_id, defect_type, field, new_value, operator
+                                )
+                                self._send_json(200, {"success": success})
+                        else:
+                            self._send_json(400, {"error": "System monitor not available"})
+
+                    elif path == "/api/monitor/params/rollback":
+                        if service.system_monitor_manager and service.system_monitor_manager.enabled:
+                            change_id = data.get("change_id")
+                            if change_id is None:
+                                self._send_json(400, {"error": "Missing change_id"})
+                            else:
+                                success = service.system_monitor_manager.param_adjuster.rollback_change(change_id)
+                                self._send_json(200, {"success": success})
+                        else:
+                            self._send_json(400, {"error": "System monitor not available"})
+
+                    elif path == "/api/monitor/health/check":
+                        if service.system_monitor_manager and service.system_monitor_manager.enabled:
+                            result = service.system_monitor_manager.get_health_status()
+                            self._send_json(200, result)
+                        else:
+                            self._send_json(400, {"error": "System monitor not available"})
+
                     else:
                         self._send_json(404, {"error": "Not found"})
 
@@ -978,6 +1203,69 @@ class DefectDetectionService:
                 self.send_header("Access-Control-Allow-Origin", "*")
                 self.end_headers()
                 self.wfile.write(json.dumps(data, ensure_ascii=False, indent=2).encode("utf-8"))
+
+            def _serve_static_file(self, relative_path: str, content_type: str):
+                base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+                file_path = os.path.join(base_dir, relative_path)
+                if os.path.exists(file_path) and os.path.isfile(file_path):
+                    self.send_response(200)
+                    self.send_header("Content-Type", content_type)
+                    self.send_header("Cache-Control", "no-cache")
+                    self.end_headers()
+                    with open(file_path, "rb") as f:
+                        self.wfile.write(f.read())
+                else:
+                    self._send_json(404, {"error": "File not found"})
+
+            def _serve_frontend_file(self, request_path: str):
+                mime_types = {
+                    ".html": "text/html",
+                    ".css": "text/css",
+                    ".js": "application/javascript",
+                    ".json": "application/json",
+                    ".png": "image/png",
+                    ".jpg": "image/jpeg",
+                    ".jpeg": "image/jpeg",
+                    ".gif": "image/gif",
+                    ".svg": "image/svg+xml",
+                    ".ico": "image/x-icon"
+                }
+                base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+                relative = request_path.lstrip("/")
+                file_path = os.path.join(base_dir, relative)
+                file_path = os.path.normpath(file_path)
+                if not file_path.startswith(base_dir):
+                    self._send_json(403, {"error": "Forbidden"})
+                    return
+                if os.path.exists(file_path) and os.path.isfile(file_path):
+                    ext = os.path.splitext(file_path)[1].lower()
+                    content_type = mime_types.get(ext, "application/octet-stream")
+                    self.send_response(200)
+                    self.send_header("Content-Type", content_type)
+                    self.send_header("Cache-Control", "no-cache")
+                    self.end_headers()
+                    with open(file_path, "rb") as f:
+                        self.wfile.write(f.read())
+                else:
+                    self._send_json(404, {"error": "File not found"})
+
+            def _serve_download_file(self, file_path: str):
+                abs_path = os.path.abspath(file_path)
+                if not os.path.exists(abs_path) or not os.path.isfile(abs_path):
+                    self._send_json(404, {"error": "File not found"})
+                    return
+                filename = os.path.basename(abs_path)
+                ext = os.path.splitext(filename)[1].lower()
+                mime_types = {".zip": "application/zip", ".csv": "text/csv", ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"}
+                content_type = mime_types.get(ext, "application/octet-stream")
+                file_size = os.path.getsize(abs_path)
+                self.send_response(200)
+                self.send_header("Content-Type", content_type)
+                self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
+                self.send_header("Content-Length", str(file_size))
+                self.end_headers()
+                with open(abs_path, "rb") as f:
+                    self.wfile.write(f.read())
 
         def _run_server():
             try:
@@ -1014,6 +1302,9 @@ class DefectDetectionService:
             },
             "data_management": {
                 "enabled": self.data_management_manager is not None and self.data_management_manager.enabled
+            },
+            "system_monitor": {
+                "enabled": self.system_monitor_manager is not None and self.system_monitor_manager.enabled
             }
         }
 
@@ -1039,6 +1330,9 @@ class DefectDetectionService:
 
         if self.data_management_manager and self.data_management_manager.enabled:
             stats["data_management"] = self.data_management_manager.get_stats()
+
+        if self.system_monitor_manager and self.system_monitor_manager.enabled:
+            stats["system_monitor"] = self.system_monitor_manager.get_stats()
 
         return stats
 

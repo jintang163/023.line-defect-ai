@@ -13,11 +13,17 @@ services:
       - ./models:/app/models
       - ./logs:/app/logs
       - ./data:/app/data
+      - ./frontend:/app/frontend
     environment:
       - CONFIG_PATH=/app/config/config.yaml
       - DEFAULT_PRODUCT_ID=PROD-001
     depends_on:
-      - rabbitmq
+      rabbitmq:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
     deploy:
       resources:
         reservations:
@@ -25,6 +31,47 @@ services:
             - driver: nvidia
               count: 1
               capabilities: [gpu]
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: line-postgres
+    restart: unless-stopped
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: defect_db
+      POSTGRES_USER: defect
+      POSTGRES_PASSWORD: defect123
+      POSTGRES_INITDB_ARGS: "--encoding=UTF-8 --lc-collate=C --lc-ctype=C"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./scripts/init_db.sql:/docker-entrypoint-initdb.d/01-init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U defect -d defect_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  minio:
+    image: minio/minio:latest
+    container_name: line-minio
+    restart: unless-stopped
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    volumes:
+      - minio-data:/data
+    command: server /data --console-address ":9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
 
   rabbitmq:
     image: rabbitmq:3.12-management
@@ -38,6 +85,14 @@ services:
       RABBITMQ_DEFAULT_PASS: guest
     volumes:
       - rabbitmq-data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
 
 volumes:
+  postgres-data:
+  minio-data:
   rabbitmq-data:

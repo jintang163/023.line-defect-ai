@@ -1,6 +1,5 @@
 from typing import Dict, Any, Optional, List, Tuple
 import threading
-import os
 import json
 from datetime import datetime
 
@@ -10,96 +9,170 @@ from src.utils.logger import Logger
 logger = Logger("record_store", "INFO", "./logs/defect-detection.log").logger
 
 try:
-    import sqlite3
-    SQLITE_AVAILABLE = True
+    import psycopg2
+    from psycopg2 import pool, sql
+    from psycopg2.extras import RealDictCursor
+    PG_AVAILABLE = True
 except ImportError:
-    SQLITE_AVAILABLE = False
-    logger.warning("sqlite3 not available, record store disabled")
+    PG_AVAILABLE = False
+    logger.warning("psycopg2 not available, record store disabled")
 
 
 class RecordStore:
     def __init__(self, config: Dict[str, Any]):
         self._config = config
         self._enabled = config.get("enable", False)
-        self._sqlite_db_dir = config.get("sqlite_db_dir", "./data")
         self._lock = threading.RLock()
-        self._conn: Optional[sqlite3.Connection] = None
+        self._pool: Optional[Any] = None
 
-        if self._enabled and SQLITE_AVAILABLE:
+        self._pg_host = config.get("host", "localhost")
+        self._pg_port = config.get("port", 5432)
+        self._pg_database = config.get("database", "defect_db")
+        self._pg_user = config.get("user", "defect")
+        self._pg_password = config.get("password", "defect123")
+        self._pg_min_conn = config.get("min_connections", 2)
+        self._pg_max_conn = config.get("max_connections", 10)
+
+        if self._enabled and PG_AVAILABLE:
             self._init_db()
 
-    def _init_db(self):
-        db_dir = self._sqlite_db_dir
-        if db_dir and not os.path.exists(db_dir):
-            os.makedirs(db_dir, exist_ok=True)
+    def _get_conn(self):
+        if self._pool:
+            return self._pool.getconn()
+        return None
 
-        db_path = os.path.join(db_dir, "detection_records.db")
+    def _put_conn(self, conn, close=False):
+        if self._pool and conn:
+            self._pool.putconn(conn, close=close)
+
+    def _init_db(self):
         try:
-            self._conn = sqlite3.connect(db_path, check_same_thread=False)
-            self._conn.row_factory = sqlite3.Row
-            logger.info(f"SQLite record store initialized: {db_path}")
+            self._pool = pool.ThreadedConnectionPool(
+                minconn=self._pg_min_conn,
+                maxconn=self._pg_max_conn,
+                host=self._pg_host,
+                port=self._pg_port,
+                database=self._pg_database,
+                user=self._pg_user,
+                password=self._pg_password
+            )
+            logger.info(f"PostgreSQL connection pool created: {self._pg_host}:{self._pg_port}/{self._pg_database}")
+
+            conn = self._get_conn()
+            try:
+                cur = conn.cursor()
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS detection_records (
+                        record_id TEXT PRIMARY KEY,
+                        detection_id TEXT,
+                        sequence_id TEXT,
+                        product_id TEXT,
+                        product_name TEXT,
+                        product_batch TEXT,
+                        product_model TEXT,
+                        result TEXT,
+                        defect_types TEXT,
+                        defect_count INTEGER,
+                        inference_time_ms DOUBLE PRECISION,
+                        model_version TEXT,
+                        timestamp DOUBLE PRECISION,
+                        line_id TEXT,
+                        station_id TEXT,
+                        camera_id TEXT,
+                        original_image_path TEXT,
+                        annotated_image_path TEXT,
+                        thumbnail_path TEXT,
+                        defects_detail TEXT,
+                        metadata JSONB,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    )
+                """)
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_dr_product_id ON detection_records(product_id)")
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_dr_timestamp ON detection_records(timestamp)")
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_dr_result ON detection_records(result)")
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_dr_defect_types ON detection_records(defect_types)")
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_dr_product_model ON detection_records(product_model)")
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_dr_detection_id ON detection_records(detection_id)")
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_dr_created_at ON detection_records(created_at)")
+                conn.commit()
+                cur.close()
+                logger.info("PostgreSQL detection_records table ensured with indexes")
+            finally:
+                self._put_conn(conn)
         except Exception as e:
-            logger.error(f"Failed to initialize SQLite record store: {e}", exc_info=True)
+            logger.error(f"Failed to initialize PostgreSQL: {e}", exc_info=True)
             self._enabled = False
 
-    def _ensure_table(self, table_name: str):
-        if not self._conn:
-            return
-        cursor = self._conn.cursor()
-        cursor.execute(f"""
-            CREATE TABLE IF NOT EXISTS {table_name} (
-                record_id TEXT PRIMARY KEY,
-                detection_id TEXT,
-                sequence_id TEXT,
-                product_id TEXT,
-                product_name TEXT,
-                product_batch TEXT,
-                product_model TEXT,
-                result TEXT,
-                defect_types TEXT,
-                defect_count INTEGER,
-                inference_time_ms REAL,
-                model_version TEXT,
-                timestamp REAL,
-                line_id TEXT,
-                station_id TEXT,
-                camera_id TEXT,
-                original_image_path TEXT,
-                annotated_image_path TEXT,
-                thumbnail_path TEXT,
-                defects_detail TEXT,
-                metadata TEXT,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-        cursor.execute(f"CREATE INDEX IF NOT EXISTS idx_{table_name}_product_id ON {table_name}(product_id)")
-        cursor.execute(f"CREATE INDEX IF NOT EXISTS idx_{table_name}_timestamp ON {table_name}(timestamp)")
-        cursor.execute(f"CREATE INDEX IF NOT EXISTS idx_{table_name}_result ON {table_name}(result)")
-        cursor.execute(f"CREATE INDEX IF NOT EXISTS idx_{table_name}_defect_types ON {table_name}(defect_types)")
-        self._conn.commit()
+    def _ensure_partition(self, date_str: str, conn):
+        partition_name = f"detection_records_{date_str}"
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT 1 FROM pg_class WHERE relname = %s
+        """, (partition_name,))
+        if not cur.fetchone():
+            start_date = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]}"
+            next_day_sql = "SELECT (%s::date + INTERVAL '1 day')::date"
+            cur.execute(next_day_sql, (start_date,))
+            end_date = cur.fetchone()[0].isoformat()
+            cur.execute(sql.SQL("""
+                CREATE TABLE IF NOT EXISTS {partition} PARTITION OF detection_records
+                FOR VALUES FROM (%s) TO (%s)
+            """).format(partition=sql.Identifier(partition_name)), (start_date, end_date))
+            conn.commit()
+            logger.info(f"Created partition: {partition_name} [{start_date}, {end_date})")
+        cur.close()
 
-    def _get_table_name(self, timestamp: float) -> str:
-        date_str = datetime.fromtimestamp(timestamp).strftime("%Y%m%d")
-        return f"detection_records_{date_str}"
+    def _ensure_standalone_partition_fallback(self, date_str: str, conn):
+        partition_name = f"detection_records_{date_str}"
+        cur = conn.cursor()
+        cur.execute("SELECT 1 FROM pg_class WHERE relname = %s", (partition_name,))
+        if not cur.fetchone():
+            start_date = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]}"
+            cur.execute(sql.SQL("""
+                CREATE TABLE IF NOT EXISTS {partition} (
+                    LIKE detection_records INCLUDING DEFAULTS INCLUDING CONSTRAINTS INCLUDING INDEXES
+                )
+            """).format(partition=sql.Identifier(partition_name)))
+            conn.commit()
+            logger.info(f"Created standalone table (non-partitioned): {partition_name}")
+        cur.close()
 
     def save_record(self, record: DetectionRecord) -> bool:
-        if not self._enabled or not self._conn:
+        if not self._enabled or not self._pool:
             return False
 
         with self._lock:
+            conn = self._get_conn()
+            if not conn:
+                return False
             try:
-                table_name = self._get_table_name(record.timestamp)
-                self._ensure_table(table_name)
+                date_str = datetime.fromtimestamp(record.timestamp).strftime("%Y%m%d")
 
-                cursor = self._conn.cursor()
-                cursor.execute(f"""
-                    INSERT OR REPLACE INTO {table_name}
+                try:
+                    self._ensure_partition(date_str, conn)
+                except Exception as e:
+                    logger.warning(f"Partition creation failed (may not be partitioned table), trying standalone: {e}")
+                    conn.rollback()
+                    try:
+                        self._ensure_standalone_partition_fallback(date_str, conn)
+                    except Exception as e2:
+                        logger.warning(f"Standalone table creation also failed: {e2}")
+                        conn.rollback()
+
+                cur = conn.cursor()
+                cur.execute("""
+                    INSERT INTO detection_records
                     (record_id, detection_id, sequence_id, product_id, product_name,
                      product_batch, product_model, result, defect_types, defect_count,
                      inference_time_ms, model_version, timestamp, line_id, station_id,
                      camera_id, original_image_path, annotated_image_path, thumbnail_path,
                      defects_detail, metadata)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (record_id) DO UPDATE SET
+                        result = EXCLUDED.result,
+                        defect_types = EXCLUDED.defect_types,
+                        defect_count = EXCLUDED.defect_count,
+                        defects_detail = EXCLUDED.defects_detail
                 """, (
                     record.record_id,
                     record.detection_id,
@@ -121,126 +194,178 @@ class RecordStore:
                     record.annotated_image_path,
                     record.thumbnail_path,
                     record.defects_detail,
-                    json.dumps(record.metadata, ensure_ascii=False) if isinstance(record.metadata, dict) else str(record.metadata)
+                    json.dumps(record.metadata, ensure_ascii=False) if isinstance(record.metadata, dict) else "{}"
                 ))
-                self._conn.commit()
+                conn.commit()
+                cur.close()
                 return True
             except Exception as e:
                 logger.error(f"Failed to save record: {e}", exc_info=True)
+                conn.rollback()
                 return False
+            finally:
+                self._put_conn(conn)
 
-    def query_records(self, product_id=None, start_time=None, end_time=None,
+    def query_records(self, product_id=None, product_model=None, start_time=None, end_time=None,
                       result=None, defect_type=None, limit=100, offset=0) -> Tuple[List[Dict], int]:
-        if not self._enabled or not self._conn:
+        if not self._enabled or not self._pool:
             return [], 0
 
         with self._lock:
+            conn = self._get_conn()
+            if not conn:
+                return [], 0
             try:
-                tables = self.get_tables()
-                if not tables:
-                    return [], 0
-
                 conditions = []
                 params = []
 
                 if product_id:
-                    conditions.append("product_id = ?")
+                    conditions.append("product_id = %s")
                     params.append(product_id)
+                if product_model:
+                    conditions.append("product_model = %s")
+                    params.append(product_model)
                 if start_time:
-                    conditions.append("timestamp >= ?")
+                    conditions.append("timestamp >= %s")
                     params.append(start_time)
                 if end_time:
-                    conditions.append("timestamp <= ?")
+                    conditions.append("timestamp <= %s")
                     params.append(end_time)
                 if result:
-                    conditions.append("result = ?")
+                    conditions.append("result = %s")
                     params.append(result)
                 if defect_type:
-                    conditions.append("defect_types LIKE ?")
+                    conditions.append("defect_types LIKE %s")
                     params.append(f"%{defect_type}%")
 
                 where_clause = ""
                 if conditions:
                     where_clause = " WHERE " + " AND ".join(conditions)
 
-                union_queries = []
-                count_queries = []
-                for table in tables:
-                    union_queries.append(f"SELECT * FROM {table}{where_clause}")
-                    count_queries.append(f"SELECT COUNT(*) as cnt FROM {table}{where_clause}")
+                count_query = f"SELECT COUNT(*) as cnt FROM detection_records{where_clause}"
+                cur = conn.cursor()
+                cur.execute(count_query, params)
+                total_count = cur.fetchone()[0]
+                cur.close()
 
-                full_query = " UNION ALL ".join(union_queries) + " ORDER BY timestamp DESC LIMIT ? OFFSET ?"
-                count_query = " + ".join([f"({q})" for q in count_queries])
-
-                count_params = params * len(tables)
-                cursor = self._conn.cursor()
-                cursor.execute(count_query, count_params)
-                total_count = cursor.fetchone()[0]
-
-                query_params = params * len(tables) + [limit, offset]
-                cursor = self._conn.cursor()
-                cursor.execute(full_query, query_params)
-                rows = cursor.fetchall()
+                full_query = f"""
+                    SELECT * FROM detection_records{where_clause}
+                    ORDER BY timestamp DESC LIMIT %s OFFSET %s
+                """
+                cur = conn.cursor(cursor_factory=RealDictCursor)
+                cur.execute(full_query, params + [limit, offset])
+                rows = cur.fetchall()
 
                 records = []
                 for row in rows:
                     record_dict = dict(row)
-                    if record_dict.get("metadata"):
+                    if record_dict.get("metadata") and isinstance(record_dict["metadata"], str):
                         try:
                             record_dict["metadata"] = json.loads(record_dict["metadata"])
                         except (json.JSONDecodeError, TypeError):
                             pass
+                    if record_dict.get("created_at"):
+                        record_dict["created_at"] = str(record_dict["created_at"])
                     records.append(record_dict)
 
+                cur.close()
                 return records, total_count
             except Exception as e:
                 logger.error(f"Failed to query records: {e}", exc_info=True)
                 return [], 0
+            finally:
+                self._put_conn(conn)
 
     def get_record_by_detection_id(self, detection_id: str) -> Optional[Dict]:
-        if not self._enabled or not self._conn:
+        if not self._enabled or not self._pool:
             return None
 
         with self._lock:
+            conn = self._get_conn()
+            if not conn:
+                return None
             try:
-                tables = self.get_tables()
-                for table in tables:
-                    cursor = self._conn.cursor()
-                    cursor.execute(f"SELECT * FROM {table} WHERE detection_id = ?", (detection_id,))
-                    row = cursor.fetchone()
-                    if row:
-                        record_dict = dict(row)
-                        if record_dict.get("metadata"):
-                            try:
-                                record_dict["metadata"] = json.loads(record_dict["metadata"])
-                            except (json.JSONDecodeError, TypeError):
-                                pass
-                        return record_dict
+                cur = conn.cursor(cursor_factory=RealDictCursor)
+                cur.execute(
+                    "SELECT * FROM detection_records WHERE detection_id = %s LIMIT 1",
+                    (detection_id,)
+                )
+                row = cur.fetchone()
+                cur.close()
+                if row:
+                    record_dict = dict(row)
+                    if record_dict.get("metadata") and isinstance(record_dict["metadata"], str):
+                        try:
+                            record_dict["metadata"] = json.loads(record_dict["metadata"])
+                        except (json.JSONDecodeError, TypeError):
+                            pass
+                    if record_dict.get("created_at"):
+                        record_dict["created_at"] = str(record_dict["created_at"])
+                    return record_dict
                 return None
             except Exception as e:
                 logger.error(f"Failed to get record by detection_id: {e}", exc_info=True)
                 return None
+            finally:
+                self._put_conn(conn)
 
     def get_tables(self) -> List[str]:
-        if not self._enabled or not self._conn:
+        if not self._enabled or not self._pool:
             return []
 
         with self._lock:
+            conn = self._get_conn()
+            if not conn:
+                return []
             try:
-                cursor = self._conn.cursor()
-                cursor.execute(
-                    "SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'detection_records_%' ORDER BY name"
-                )
-                return [row[0] for row in cursor.fetchall()]
+                cur = conn.cursor()
+                cur.execute("""
+                    SELECT tablename FROM pg_tables
+                    WHERE tablename LIKE 'detection_records_%'
+                    AND schemaname = 'public'
+                    ORDER BY tablename
+                """)
+                return [row[0] for row in cur.fetchall()]
             except Exception as e:
                 logger.error(f"Failed to get tables: {e}", exc_info=True)
                 return []
+            finally:
+                self._put_conn(conn)
+
+    def get_distinct_values(self, column: str) -> List[str]:
+        if not self._enabled or not self._pool:
+            return []
+
+        allowed = {"product_id", "product_model", "defect_types", "result"}
+        if column not in allowed:
+            return []
+
+        with self._lock:
+            conn = self._get_conn()
+            if not conn:
+                return []
+            try:
+                cur = conn.cursor()
+                cur.execute(
+                    sql.SQL("SELECT DISTINCT {col} FROM detection_records WHERE {col} IS NOT NULL AND {col} != '' ORDER BY {col}").format(
+                        col=sql.Identifier(column)
+                    )
+                )
+                return [row[0] for row in cur.fetchall()]
+            except Exception as e:
+                logger.error(f"Failed to get distinct values for {column}: {e}", exc_info=True)
+                return []
+            finally:
+                self._put_conn(conn)
 
     def cleanup_old_tables(self, retention_days: int) -> int:
-        if not self._enabled or not self._conn:
+        if not self._enabled or not self._pool:
             return 0
 
         with self._lock:
+            conn = self._get_conn()
+            if not conn:
+                return 0
             try:
                 tables = self.get_tables()
                 cutoff = datetime.now()
@@ -251,25 +376,30 @@ class RecordStore:
                         table_date = datetime.strptime(date_str, "%Y%m%d")
                         age_days = (cutoff - table_date).days
                         if age_days > retention_days:
-                            cursor = self._conn.cursor()
-                            cursor.execute(f"DROP TABLE IF EXISTS {table}")
+                            cur = conn.cursor()
+                            cur.execute(sql.SQL("DROP TABLE IF EXISTS {table}").format(
+                                table=sql.Identifier(table)
+                            ))
+                            conn.commit()
+                            cur.close()
                             dropped += 1
-                            logger.info(f"Dropped old table: {table}")
+                            logger.info(f"Dropped old partition/table: {table}")
                     except ValueError:
                         continue
-                if dropped > 0:
-                    self._conn.commit()
                 return dropped
             except Exception as e:
                 logger.error(f"Failed to cleanup old tables: {e}", exc_info=True)
+                conn.rollback()
                 return 0
+            finally:
+                self._put_conn(conn)
 
     def close(self):
         with self._lock:
-            if self._conn:
+            if self._pool:
                 try:
-                    self._conn.close()
+                    self._pool.closeall()
                 except Exception as e:
-                    logger.warning(f"Error closing SQLite connection: {e}")
-                self._conn = None
-        logger.info("Record store closed")
+                    logger.warning(f"Error closing PostgreSQL pool: {e}")
+                self._pool = None
+        logger.info("Record store closed (PostgreSQL)")
