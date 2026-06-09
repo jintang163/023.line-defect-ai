@@ -4,6 +4,7 @@ from enum import Enum
 import numpy as np
 import time
 import uuid
+from datetime import datetime
 
 
 class DefectType(Enum):
@@ -691,3 +692,124 @@ class DatabaseConfig:
             "table_prefix": self.table_prefix,
             "enable_timescaledb": self.enable_timescaledb
         }
+
+
+@dataclass
+class DetectionRecord:
+    record_id: str
+    detection_id: str
+    sequence_id: str
+    product_id: str
+    product_name: str
+    product_batch: str
+    product_model: str
+    result: DetectionResult
+    defect_types: str
+    defect_count: int
+    inference_time_ms: float
+    model_version: str
+    timestamp: float
+    line_id: str = ""
+    station_id: str = ""
+    camera_id: str = ""
+    original_image_path: str = ""
+    annotated_image_path: str = ""
+    thumbnail_path: str = ""
+    defects_detail: str = ""
+    metadata: Dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def create(cls, detection_id: str, sequence_id: str,
+               product_id: str, product_name: str,
+               product_batch: str, product_model: str,
+               result: DetectionResult,
+               defect_types: str, defect_count: int,
+               inference_time_ms: float, model_version: str,
+               line_id: str = "", station_id: str = "",
+               camera_id: str = "",
+               original_image_path: str = "",
+               annotated_image_path: str = "",
+               thumbnail_path: str = "",
+               defects_detail: str = "",
+               metadata: Optional[Dict[str, Any]] = None) -> "DetectionRecord":
+        return cls(
+            record_id=str(uuid.uuid4()),
+            detection_id=detection_id,
+            sequence_id=sequence_id,
+            product_id=product_id,
+            product_name=product_name,
+            product_batch=product_batch,
+            product_model=product_model,
+            result=result,
+            defect_types=defect_types,
+            defect_count=defect_count,
+            inference_time_ms=inference_time_ms,
+            model_version=model_version,
+            timestamp=time.time(),
+            line_id=line_id,
+            station_id=station_id,
+            camera_id=camera_id,
+            original_image_path=original_image_path,
+            annotated_image_path=annotated_image_path,
+            thumbnail_path=thumbnail_path,
+            defects_detail=defects_detail,
+            metadata=metadata or {}
+        )
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "record_id": self.record_id,
+            "detection_id": self.detection_id,
+            "sequence_id": self.sequence_id,
+            "product_id": self.product_id,
+            "product_name": self.product_name,
+            "product_batch": self.product_batch,
+            "product_model": self.product_model,
+            "result": self.result.value,
+            "defect_types": self.defect_types,
+            "defect_count": self.defect_count,
+            "inference_time_ms": self.inference_time_ms,
+            "model_version": self.model_version,
+            "timestamp": self.timestamp,
+            "timestamp_iso": datetime.fromtimestamp(self.timestamp).isoformat() if self.timestamp else "",
+            "date_partition": datetime.fromtimestamp(self.timestamp).strftime("%Y%m%d") if self.timestamp else "",
+            "line_id": self.line_id,
+            "station_id": self.station_id,
+            "camera_id": self.camera_id,
+            "original_image_path": self.original_image_path,
+            "annotated_image_path": self.annotated_image_path,
+            "thumbnail_path": self.thumbnail_path,
+            "defects_detail": self.defects_detail,
+            "metadata": self.metadata
+        }
+
+    @classmethod
+    def from_db_row(cls, row: Dict[str, Any]) -> "DetectionRecord":
+        result_val = row.get("result", "OK")
+        try:
+            result = DetectionResult(result_val)
+        except ValueError:
+            result = DetectionResult.OK
+        return cls(
+            record_id=row.get("record_id", ""),
+            detection_id=row.get("detection_id", ""),
+            sequence_id=row.get("sequence_id", ""),
+            product_id=row.get("product_id", ""),
+            product_name=row.get("product_name", ""),
+            product_batch=row.get("product_batch", ""),
+            product_model=row.get("product_model", ""),
+            result=result,
+            defect_types=row.get("defect_types", ""),
+            defect_count=row.get("defect_count", 0),
+            inference_time_ms=row.get("inference_time_ms", 0.0),
+            model_version=row.get("model_version", ""),
+            timestamp=row.get("timestamp", 0.0),
+            line_id=row.get("line_id", ""),
+            station_id=row.get("station_id", ""),
+            camera_id=row.get("camera_id", ""),
+            original_image_path=row.get("original_image_path", ""),
+            annotated_image_path=row.get("annotated_image_path", ""),
+            thumbnail_path=row.get("thumbnail_path", ""),
+            defects_detail=row.get("defects_detail", ""),
+            metadata=row.get("metadata", {}) if isinstance(row.get("metadata"), dict) else {}
+        )

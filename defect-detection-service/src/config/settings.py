@@ -87,3 +87,6 @@ class ConfigManager:
 
     def get_manual_override_config(self) -> Dict[str, Any]:
         return self._config.get("manual_override", {})
+
+    def get_data_management_config(self) -> Dict[str, Any]:
+        return self._config.get("data_management", {})

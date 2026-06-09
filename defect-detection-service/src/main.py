@@ -60,6 +60,12 @@ try:
 except ImportError:
     MANUAL_OVERRIDE_AVAILABLE = False
 
+try:
+    from src.data_management import DataManagementManager
+    DATA_MANAGEMENT_AVAILABLE = True
+except ImportError:
+    DATA_MANAGEMENT_AVAILABLE = False
+
 logger = Logger("defect-detection-service", "INFO", "./logs/defect-detection.log").logger
 
 
@@ -148,6 +154,15 @@ class DefectDetectionService:
                 def on_manual_override(record):
                     self.action_logger.log_manual_override(record)
                 self.manual_override_manager.register_override_callback(on_manual_override)
+
+        self.data_management_manager = None
+        if DATA_MANAGEMENT_AVAILABLE:
+            dm_config = self.config_manager.get_data_management_config()
+            if dm_config.get("enable", False):
+                self.data_management_manager = DataManagementManager(dm_config)
+                logger.info("✅ 数据管理与追溯模块已启用")
+            else:
+                logger.info("数据管理与追溯模块已禁用")
 
         self.message_consumer = MessageConsumer(msg_config)
         self.result_producer = ResultProducer(msg_config)
@@ -311,6 +326,10 @@ class DefectDetectionService:
             self.action_logger.stop()
             logger.info("Action logger stopped")
 
+        if self.data_management_manager:
+            self.data_management_manager.close()
+            logger.info("Data management manager stopped")
+
         if self._yield_db_conn:
             try:
                 self._yield_db_conn.close()
@@ -376,6 +395,13 @@ class DefectDetectionService:
 
             if self.action_logger and self.action_logger.enabled:
                 self.action_logger.log_detection_result(detection_output)
+
+            if self.data_management_manager and self.data_management_manager.enabled:
+                self.data_management_manager.save_detection_result(
+                    detection_output, product_config,
+                    original_image=image_data.image,
+                    annotated_image=annotated
+                )
 
             self.result_producer.send_result(detection_output, annotated)
 
@@ -599,6 +625,112 @@ class DefectDetectionService:
                         else:
                             self._send_json(400, {"error": "Action logger not available"})
 
+                    elif path == "/api/data-management/status":
+                        if service.data_management_manager and service.data_management_manager.enabled:
+                            self._send_json(200, service.data_management_manager.get_stats())
+                        else:
+                            self._send_json(400, {"error": "Data management not available"})
+
+                    elif path == "/api/data-management/search":
+                        if service.data_management_manager and service.data_management_manager.enabled:
+                            product_id = params.get("product_id", [None])[0]
+                            product_model = params.get("product_model", [None])[0]
+                            start_time = params.get("start_time", [None])[0]
+                            end_time = params.get("end_time", [None])[0]
+                            defect_type = params.get("defect_type", [None])[0]
+                            result = params.get("result", [None])[0]
+                            limit = int(params.get("limit", [50])[0])
+                            offset = int(params.get("offset", [0])[0])
+                            start_time_f = float(start_time) if start_time else None
+                            end_time_f = float(end_time) if end_time else None
+                            search_result = service.data_management_manager.search(
+                                product_id=product_id, product_model=product_model,
+                                start_time=start_time_f, end_time=end_time_f,
+                                defect_type=defect_type, result=result,
+                                limit=limit, offset=offset
+                            )
+                            self._send_json(200, search_result)
+                        else:
+                            self._send_json(400, {"error": "Data management not available"})
+
+                    elif path == "/api/data-management/record":
+                        detection_id = params.get("detection_id", [None])[0]
+                        if not detection_id:
+                            self._send_json(400, {"error": "Missing detection_id"})
+                        elif service.data_management_manager and service.data_management_manager.enabled:
+                            record = service.data_management_manager.get_record_detail(detection_id)
+                            if record:
+                                self._send_json(200, record)
+                            else:
+                                self._send_json(404, {"error": "Record not found"})
+                        else:
+                            self._send_json(400, {"error": "Data management not available"})
+
+                    elif path == "/api/data-management/suggestions":
+                        if service.data_management_manager and service.data_management_manager.enabled:
+                            suggestions = service.data_management_manager.get_search_suggestions()
+                            self._send_json(200, suggestions)
+                        else:
+                            self._send_json(400, {"error": "Data management not available"})
+
+                    elif path == "/api/data-management/statistics/yield-trend":
+                        if service.data_management_manager and service.data_management_manager.enabled:
+                            product_id = params.get("product_id", [None])[0]
+                            start_time = params.get("start_time", [None])[0]
+                            end_time = params.get("end_time", [None])[0]
+                            interval = params.get("interval", ["hour"])[0]
+                            start_time_f = float(start_time) if start_time else None
+                            end_time_f = float(end_time) if end_time else None
+                            result = service.data_management_manager.get_yield_trend(
+                                product_id=product_id, start_time=start_time_f,
+                                end_time=end_time_f, interval=interval
+                            )
+                            self._send_json(200, result)
+                        else:
+                            self._send_json(400, {"error": "Data management not available"})
+
+                    elif path == "/api/data-management/statistics/defect-distribution":
+                        if service.data_management_manager and service.data_management_manager.enabled:
+                            product_id = params.get("product_id", [None])[0]
+                            start_time = params.get("start_time", [None])[0]
+                            end_time = params.get("end_time", [None])[0]
+                            start_time_f = float(start_time) if start_time else None
+                            end_time_f = float(end_time) if end_time else None
+                            result = service.data_management_manager.get_defect_distribution(
+                                product_id=product_id, start_time=start_time_f,
+                                end_time=end_time_f
+                            )
+                            self._send_json(200, result)
+                        else:
+                            self._send_json(400, {"error": "Data management not available"})
+
+                    elif path == "/api/data-management/statistics/product-ranking":
+                        if service.data_management_manager and service.data_management_manager.enabled:
+                            start_time = params.get("start_time", [None])[0]
+                            end_time = params.get("end_time", [None])[0]
+                            top_n = int(params.get("top_n", [10])[0])
+                            start_time_f = float(start_time) if start_time else None
+                            end_time_f = float(end_time) if end_time else None
+                            result = service.data_management_manager.get_product_defect_ranking(
+                                start_time=start_time_f, end_time=end_time_f, top_n=top_n
+                            )
+                            self._send_json(200, result)
+                        else:
+                            self._send_json(400, {"error": "Data management not available"})
+
+                    elif path == "/api/data-management/statistics/overview":
+                        if service.data_management_manager and service.data_management_manager.enabled:
+                            start_time = params.get("start_time", [None])[0]
+                            end_time = params.get("end_time", [None])[0]
+                            start_time_f = float(start_time) if start_time else None
+                            end_time_f = float(end_time) if end_time else None
+                            result = service.data_management_manager.get_overview(
+                                start_time=start_time_f, end_time=end_time_f
+                            )
+                            self._send_json(200, result)
+                        else:
+                            self._send_json(400, {"error": "Data management not available"})
+
                     else:
                         self._send_json(404, {"error": "Not found"})
 
@@ -766,6 +898,71 @@ class DefectDetectionService:
                         )
                         self._send_json(200, {"command_id": command_id})
 
+                    elif path == "/api/data-management/export/images":
+                        if not service.data_management_manager or not service.data_management_manager.enabled:
+                            self._send_json(400, {"error": "Data management not available"})
+                            return
+                        detection_ids = data.get("detection_ids", [])
+                        output_filename = data.get("output_filename")
+                        if not detection_ids:
+                            self._send_json(400, {"error": "Missing detection_ids"})
+                            return
+                        zip_path = service.data_management_manager.export_images_zip(
+                            detection_ids, output_filename
+                        )
+                        if zip_path:
+                            self._send_json(200, {"file_path": zip_path})
+                        else:
+                            self._send_json(500, {"error": "Export failed"})
+
+                    elif path == "/api/data-management/export/records":
+                        if not service.data_management_manager or not service.data_management_manager.enabled:
+                            self._send_json(400, {"error": "Data management not available"})
+                            return
+                        detection_ids = data.get("detection_ids")
+                        product_id = data.get("product_id")
+                        start_time = data.get("start_time")
+                        end_time = data.get("end_time")
+                        result_filter = data.get("result")
+                        defect_type = data.get("defect_type")
+                        output_filename = data.get("output_filename")
+                        start_time_f = float(start_time) if start_time else None
+                        end_time_f = float(end_time) if end_time else None
+                        csv_path = service.data_management_manager.export_records_excel(
+                            detection_ids=detection_ids, product_id=product_id,
+                            start_time=start_time_f, end_time=end_time_f,
+                            result=result_filter, defect_type=defect_type,
+                            output_filename=output_filename
+                        )
+                        if csv_path:
+                            self._send_json(200, {"file_path": csv_path})
+                        else:
+                            self._send_json(500, {"error": "Export failed"})
+
+                    elif path == "/api/data-management/export/all":
+                        if not service.data_management_manager or not service.data_management_manager.enabled:
+                            self._send_json(400, {"error": "Data management not available"})
+                            return
+                        detection_ids = data.get("detection_ids")
+                        product_id = data.get("product_id")
+                        start_time = data.get("start_time")
+                        end_time = data.get("end_time")
+                        result_filter = data.get("result")
+                        defect_type = data.get("defect_type")
+                        output_filename = data.get("output_filename")
+                        start_time_f = float(start_time) if start_time else None
+                        end_time_f = float(end_time) if end_time else None
+                        zip_path = service.data_management_manager.export_all(
+                            detection_ids=detection_ids, product_id=product_id,
+                            start_time=start_time_f, end_time=end_time_f,
+                            result=result_filter, defect_type=defect_type,
+                            output_filename=output_filename
+                        )
+                        if zip_path:
+                            self._send_json(200, {"file_path": zip_path})
+                        else:
+                            self._send_json(500, {"error": "Export failed"})
+
                     else:
                         self._send_json(404, {"error": "Not found"})
 
@@ -814,6 +1011,9 @@ class DefectDetectionService:
             },
             "manual_override": {
                 "enabled": self.manual_override_manager is not None
+            },
+            "data_management": {
+                "enabled": self.data_management_manager is not None and self.data_management_manager.enabled
             }
         }
 
@@ -836,6 +1036,9 @@ class DefectDetectionService:
 
         if self.manual_override_manager:
             stats["manual_override"] = self.manual_override_manager.get_stats()
+
+        if self.data_management_manager and self.data_management_manager.enabled:
+            stats["data_management"] = self.data_management_manager.get_stats()
 
         return stats
 

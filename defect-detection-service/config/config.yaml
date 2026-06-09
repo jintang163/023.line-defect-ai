@@ -125,6 +125,32 @@ api:
   docs_enable: true
   max_image_size_mb: 10
 
+data_management:
+  enable: true
+  record_storage:
+    enable: true
+    sqlite_db_dir: "./data/detection_records"
+  image_archive:
+    enable: true
+    storage_type: "local"
+    local_dir: "./data/defect_images"
+    minio:
+      endpoint: "localhost:9000"
+      access_key: "minioadmin"
+      secret_key: "minioadmin"
+      bucket: "defect-images"
+      use_ssl: false
+    retention_days: 90
+    auto_cleanup: true
+    cleanup_interval_hours: 24
+    thumbnail_max_size: 200
+    compression_quality: 85
+  export:
+    temp_dir: "./data/export_temp"
+    max_export_records: 10000
+  statistics:
+    default_time_range_hours: 24
+
 metadata:
   line_id: "line-001"
   station_id: "station-001"
