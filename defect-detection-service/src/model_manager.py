@@ -25,13 +25,14 @@ except ImportError:
 
 
 class ModelManager:
-    def __init__(self, config: Dict[str, Any]):
+    def __init__(self, config: Dict[str, Any], algorithm_manager=None):
         self._config = config
         self._enabled = config.get("enable", False)
         self._models_dir = config.get("models_dir", "./models")
         self._versions_db_path = config.get("versions_db_path", "./data/model_versions.db")
         self._annotations_db_path = config.get("annotations_db_path", "./data/annotations.db")
         self._collection_dir = config.get("collection_dir", "./data/retrain_samples")
+        self._algorithm_manager = algorithm_manager
 
         self._retrain_false_positive_threshold = config.get("retrain_false_positive_threshold", 0.05)
         self._retrain_false_negative_threshold = config.get("retrain_false_negative_threshold", 0.05)
@@ -47,8 +48,9 @@ class ModelManager:
         self._ab_tests: Dict[str, ABTestConfig] = {}
         self._retrain_triggers: List[RetrainTrigger] = []
 
-        self._false_positive_daily: Dict[str, List[float]] = {}
-        self._false_negative_daily: Dict[str, List[float]] = {}
+        self._false_positive_daily: Dict[str, int] = {}
+        self._false_negative_daily: Dict[str, int] = {}
+        self._total_detections_daily: Dict[str, int] = {}
 
         self._versions_db_conn: Optional[sqlite3.Connection] = None
         self._annotations_db_conn: Optional[sqlite3.Connection] = None
@@ -454,6 +456,8 @@ class ModelManager:
             target.canary_traffic_percent = 0.0
             self._save_version_to_db(target)
             logger.info(f"Rolled back to version: {target.version_tag} by {operator}")
+
+            self._reload_algorithm_for_version(target)
             return True
 
     def promote_to_canary(self, version_id: str, canary_lines: List[str],
@@ -473,6 +477,8 @@ class ModelManager:
             version.canary_traffic_percent = traffic_percent
             self._save_version_to_db(version)
             logger.info(f"Version {version.version_tag} promoted to canary on lines: {canary_lines}")
+
+            self._reload_algorithm_for_version(version)
             return True
 
     def promote_to_production(self, version_id: str) -> bool:
@@ -501,6 +507,8 @@ class ModelManager:
             version.canary_traffic_percent = 0.0
             self._save_version_to_db(version)
             logger.info(f"Version {version.version_tag} promoted to production")
+
+            self._reload_algorithm_for_version(version)
             return True
 
     def update_version_metrics(self, version_id: str, metrics: Dict[str, Any]) -> bool:
@@ -526,6 +534,33 @@ class ModelManager:
             return False
         import random
         return random.random() * 100 < canary.canary_traffic_percent
+
+    def _reload_algorithm_for_version(self, version: ModelVersion) -> bool:
+        if not self._algorithm_manager or not version:
+            logger.warning("Cannot reload: algorithm_manager not set or version is None")
+            return False
+
+        if not os.path.exists(version.file_path):
+            logger.error(f"Model file not found for reload: {version.file_path}")
+            return False
+
+        current_product_id = self._algorithm_manager.current_product_id
+        if not current_product_id:
+            logger.warning("No current product set, cannot reload model")
+            return False
+
+        success = self._algorithm_manager.reload_model(
+            product_id=current_product_id,
+            algo_type=version.algorithm_type,
+            new_model_path=version.file_path
+        )
+
+        if success:
+            logger.info(f"Algorithm reloaded for version {version.version_tag} ({version.algorithm_type.value})")
+        else:
+            logger.error(f"Failed to reload algorithm for version {version.version_tag}")
+
+        return success
 
     def create_annotation(self, detection_id: str, image_path: str,
                           annotation_type: AnnotationType,
@@ -588,13 +623,17 @@ class ModelManager:
 
     def _update_error_rate(self, annotation: AnnotationRecord):
         today = datetime.now().strftime("%Y-%m-%d")
-        key = f"{annotation.annotation_type.value}_{today}"
 
-        if annotation.annotation_type in (AnnotationType.FALSE_POSITIVE, AnnotationType.FALSE_NEGATIVE):
-            daily_data = self._false_positive_daily if annotation.annotation_type == AnnotationType.FALSE_POSITIVE else self._false_negative_daily
-            if key not in daily_data:
-                daily_data[key] = []
-            daily_data[key].append(time.time())
+        if annotation.annotation_type == AnnotationType.FALSE_POSITIVE:
+            self._false_positive_daily[today] = self._false_positive_daily.get(today, 0) + 1
+        elif annotation.annotation_type == AnnotationType.FALSE_NEGATIVE:
+            self._false_negative_daily[today] = self._false_negative_daily.get(today, 0) + 1
+
+    def record_detection(self, product_id: str = "", is_ng: bool = False,
+                         defect_count: int = 0):
+        today = datetime.now().strftime("%Y-%m-%d")
+        key = today
+        self._total_detections_daily[key] = self._total_detections_daily.get(key, 0) + 1
 
     def list_annotations(self, detection_id: str = None,
                          annotation_type: AnnotationType = None,
@@ -878,7 +917,7 @@ class ModelManager:
 
     def _compute_consecutive_daily_rate(self, rate_type: str,
                                         product_id: str = None) -> Dict[str, Any]:
-        daily_data = self._false_positive_daily if rate_type == "false_positive" else self._false_negative_daily
+        error_data = self._false_positive_daily if rate_type == "false_positive" else self._false_negative_daily
         threshold = self._retrain_false_positive_threshold if rate_type == "false_positive" else self._retrain_false_negative_threshold
 
         today = datetime.now()
@@ -887,12 +926,12 @@ class ModelManager:
 
         for i in range(30):
             check_date = (today - timedelta(days=i)).strftime("%Y-%m-%d")
-            key_prefix = rate_type
-            matching_keys = [k for k in daily_data.keys() if check_date in k]
 
-            if matching_keys:
-                total_count = sum(len(daily_data[k]) for k in matching_keys)
-                rate = min(total_count / 100.0, 1.0)
+            total_detections = self._total_detections_daily.get(check_date, 0)
+            error_count = error_data.get(check_date, 0)
+
+            if total_detections > 0:
+                rate = error_count / total_detections
 
                 if i == 0:
                     current_rate = rate
@@ -901,7 +940,7 @@ class ModelManager:
                     consecutive_days += 1
                 else:
                     break
-            else:
+            elif error_count == 0:
                 break
 
         return {
@@ -1042,6 +1081,13 @@ class ModelManager:
             active_ab_tests = sum(1 for t in self._ab_tests.values() if t.status == ABTestStatus.RUNNING)
             pending_retrains = sum(1 for t in self._retrain_triggers if t.status in (RetrainTriggerStatus.PENDING, RetrainTriggerStatus.COLLECTING, RetrainTriggerStatus.TRAINING))
 
+            today = datetime.now().strftime("%Y-%m-%d")
+            today_fp = self._false_positive_daily.get(today, 0)
+            today_fn = self._false_negative_daily.get(today, 0)
+            today_total = self._total_detections_daily.get(today, 0)
+            today_fp_rate = today_fp / today_total if today_total > 0 else 0.0
+            today_fn_rate = today_fn / today_total if today_total > 0 else 0.0
+
             return {
                 "enabled": self._enabled,
                 "total_versions": len(self._versions),
@@ -1056,6 +1102,13 @@ class ModelManager:
                     "false_positive": self._retrain_false_positive_threshold,
                     "false_negative": self._retrain_false_negative_threshold,
                     "consecutive_days": self._retrain_consecutive_days
+                },
+                "today_stats": {
+                    "total_detections": today_total,
+                    "false_positive_count": today_fp,
+                    "false_negative_count": today_fn,
+                    "false_positive_rate": round(today_fp_rate, 4),
+                    "false_negative_rate": round(today_fn_rate, 4)
                 }
             }
 

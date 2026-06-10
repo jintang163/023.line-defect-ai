@@ -245,7 +245,7 @@ class DefectDetectionService:
         if MODEL_MANAGER_AVAILABLE:
             mm_config = self.config_manager.get_model_management_config()
             if mm_config.get("enable", False):
-                self.model_manager = ModelManager(mm_config)
+                self.model_manager = ModelManager(mm_config, algorithm_manager=self.algorithm_manager)
                 logger.info("✅ 模型管理模块已启用")
             else:
                 logger.info("模型管理模块已禁用")
@@ -506,6 +506,16 @@ class DefectDetectionService:
                     pass
 
             self.result_producer.send_result(detection_output, annotated)
+
+            if self.model_manager and self.model_manager.enabled:
+                try:
+                    self.model_manager.record_detection(
+                        product_id=detection_output.product_id,
+                        is_ng=detection_output.result == DetectionResult.NG,
+                        defect_count=len(detection_output.defects)
+                    )
+                except Exception:
+                    pass
 
             result_icon = "✓" if detection_output.result.value == "OK" else "✗"
             logger.info(

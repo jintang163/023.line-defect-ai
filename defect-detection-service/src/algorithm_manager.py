@@ -504,6 +504,83 @@ class AlgorithmManager:
             logger.info(f"Updated params for {algo_type.value}: {params}")
             return True
 
+    def reload_model(self, product_id: str, algo_type: AlgorithmType,
+                     new_model_path: str) -> bool:
+        with self._lock:
+            algo_key = f"{product_id}_{algo_type.value}"
+            if algo_key not in self._initialized_algorithms:
+                logger.warning(f"Algorithm {algo_key} not initialized, cannot reload model")
+                return False
+
+            product_config = self._products.get(product_id)
+            if not product_config:
+                logger.error(f"Product {product_id} not found for model reload")
+                return False
+
+            algo_config = product_config.get_algorithm_config(algo_type)
+            if not algo_config:
+                logger.error(f"Algorithm config not found for {algo_type.value} in product {product_id}")
+                return False
+
+            if algo_type not in self._dl_algorithms:
+                logger.error(f"Model reload only supported for deep learning algorithms, got {algo_type.value}")
+                return False
+
+            if not os.path.exists(new_model_path):
+                logger.error(f"New model file not found: {new_model_path}")
+                return False
+
+            old_algo = self._initialized_algorithms.get(algo_key)
+            if old_algo and hasattr(old_algo, 'destroy'):
+                try:
+                    old_algo.destroy()
+                    logger.info(f"Destroyed old algorithm instance for {algo_key}")
+                except Exception as e:
+                    logger.warning(f"Error destroying old algorithm during reload: {e}")
+
+            new_algo = self._dl_algorithms[algo_type]
+
+            if new_algo.initialize(
+                params=algo_config.params,
+                model_path=new_model_path,
+                backend=product_config.inference_backend.value,
+                gpu_device_id=product_config.gpu_device_id,
+                enable_tensorrt=product_config.enable_tensorrt
+            ):
+                self._initialized_algorithms[algo_key] = new_algo
+                algo_config.model_path = new_model_path
+                logger.info(f"✅ Model reloaded for {algo_key}: {new_model_path}")
+                return True
+            else:
+                logger.error(f"❌ Failed to reload model for {algo_key}: {new_model_path}")
+                if old_algo and hasattr(old_algo, 'is_initialized') and not old_algo.is_initialized:
+                    try:
+                        old_algo.initialize(
+                            params=algo_config.params,
+                            model_path=algo_config.model_path,
+                            backend=product_config.inference_backend.value,
+                            gpu_device_id=product_config.gpu_device_id,
+                            enable_tensorrt=product_config.enable_tensorrt
+                        )
+                        self._initialized_algorithms[algo_key] = old_algo
+                        logger.warning(f"Rolled back to previous model for {algo_key}")
+                    except Exception as rollback_err:
+                        logger.error(f"Rollback also failed for {algo_key}: {rollback_err}")
+                return False
+
+    def get_model_path(self, product_id: str, algo_type: AlgorithmType) -> Optional[str]:
+        with self._lock:
+            algo_key = f"{product_id}_{algo_type.value}"
+            algo = self._initialized_algorithms.get(algo_key)
+            if algo and hasattr(algo, '_model_path'):
+                return algo._model_path
+            product_config = self._products.get(product_id)
+            if product_config:
+                algo_config = product_config.get_algorithm_config(algo_type)
+                if algo_config:
+                    return algo_config.model_path
+            return None
+
     def cleanup(self):
         with self._lock:
             for algo in self._initialized_algorithms.values():
