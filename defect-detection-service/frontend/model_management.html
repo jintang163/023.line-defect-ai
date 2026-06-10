@@ -1,0 +1,1112 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>模型管理 - 深度学习选配</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+:root {
+  --bg-primary: #0f1923;
+  --bg-secondary: #1a2736;
+  --bg-card: #1e2d3d;
+  --bg-input: #253545;
+  --border: #2d4a5e;
+  --text-primary: #e8edf2;
+  --text-secondary: #8fa3b5;
+  --text-muted: #5c7a91;
+  --accent: #3b9ff5;
+  --accent-hover: #5bb0ff;
+  --green: #2ecc71;
+  --green-bg: rgba(46,204,113,0.15);
+  --red: #e74c3c;
+  --red-bg: rgba(231,76,60,0.15);
+  --orange: #f39c12;
+  --orange-bg: rgba(243,156,18,0.15);
+  --purple: #9b59b6;
+  --purple-bg: rgba(155,89,182,0.15);
+  --cyan: #1abc9c;
+  --shadow: 0 2px 12px rgba(0,0,0,0.3);
+  --radius: 8px;
+}
+html, body { height: 100%; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", sans-serif;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  line-height: 1.6;
+}
+.app-header {
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border);
+  padding: 14px 24px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+.app-header h1 { font-size: 18px; font-weight: 600; letter-spacing: 1px; }
+.app-header .status-dot { width:8px;height:8px;border-radius:50%;background:var(--green);display:inline-block;margin-left:8px; }
+.tab-nav {
+  display: flex; background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border); padding: 0 24px;
+}
+.tab-btn {
+  padding: 12px 24px; background: none; border: none;
+  color: var(--text-secondary); font-size: 14px; cursor: pointer;
+  border-bottom: 2px solid transparent; transition: all 0.2s;
+}
+.tab-btn:hover { color: var(--text-primary); }
+.tab-btn.active { color: var(--accent); border-bottom-color: var(--accent); }
+.tab-content { display:none;padding:20px 24px;height:calc(100vh - 110px);overflow-y:auto; }
+.tab-content.active { display: block; }
+.btn {
+  padding: 8px 20px; border: none; border-radius: 6px;
+  font-size: 13px; font-weight: 500; cursor: pointer;
+  transition: all 0.2s; display: inline-flex;
+  align-items: center; gap: 6px; white-space: nowrap;
+}
+.btn-primary { background:var(--accent);color:#fff; }
+.btn-primary:hover { background:var(--accent-hover); }
+.btn-success { background:var(--green);color:#fff; }
+.btn-success:hover { background:#27ae60; }
+.btn-danger { background:var(--red);color:#fff; }
+.btn-danger:hover { background:#c0392b; }
+.btn-warning { background:var(--orange);color:#fff; }
+.btn-warning:hover { background:#e67e22; }
+.btn-outline { background:transparent;border:1px solid var(--border);color:var(--text-secondary); }
+.btn-outline:hover { border-color:var(--accent);color:var(--accent); }
+.btn-sm { padding:4px 12px;font-size:12px; }
+.btn:disabled { opacity:0.5;cursor:not-allowed; }
+.stats-cards {
+  display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));
+  gap:16px;margin-bottom:24px;
+}
+.stat-card {
+  background:var(--bg-card);border-radius:var(--radius);padding:16px;
+  border-left:4px solid var(--accent);
+}
+.stat-card.green { border-left-color:var(--green); }
+.stat-card.red { border-left-color:var(--red); }
+.stat-card.orange { border-left-color:var(--orange); }
+.stat-card.purple { border-left-color:var(--purple); }
+.stat-card.cyan { border-left-color:var(--cyan); }
+.stat-card .stat-label { font-size:12px;color:var(--text-secondary);margin-bottom:4px; }
+.stat-card .stat-value { font-size:24px;font-weight:700; }
+.results-table {
+  width:100%;border-collapse:collapse;background:var(--bg-card);
+  border-radius:var(--radius);overflow:hidden;
+}
+.results-table th {
+  background:var(--bg-input);padding:10px 14px;text-align:left;
+  font-size:12px;font-weight:600;color:var(--text-secondary);
+  text-transform:uppercase;letter-spacing:0.5px;
+  border-bottom:1px solid var(--border);
+}
+.results-table td {
+  padding:10px 14px;font-size:13px;border-bottom:1px solid var(--border);vertical-align:middle;
+}
+.results-table tbody tr { cursor:pointer;transition:background 0.15s; }
+.results-table tbody tr:hover { background:rgba(59,159,245,0.08); }
+.badge {
+  display:inline-block;padding:2px 10px;border-radius:12px;
+  font-size:12px;font-weight:600;
+}
+.badge-production { background:var(--green-bg);color:var(--green); }
+.badge-canary { background:var(--orange-bg);color:var(--orange); }
+.badge-staging { background:var(--purple-bg);color:var(--purple); }
+.badge-draft { background:rgba(95,122,145,0.2);color:var(--text-muted); }
+.badge-deprecated { background:var(--red-bg);color:var(--red); }
+.badge-running { background:var(--green-bg);color:var(--green); }
+.badge-pending { background:var(--orange-bg);color:var(--orange); }
+.badge-completed { background:rgba(95,122,145,0.2);color:var(--text-muted); }
+.badge-failed { background:var(--red-bg);color:var(--red); }
+.badge-collecting { background:var(--purple-bg);color:var(--purple); }
+.badge-training { background:var(--cyan);color:#fff; }
+.filter-bar {
+  display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end;
+  background:var(--bg-card);padding:16px;border-radius:var(--radius);margin-bottom:20px;
+}
+.filter-group { display:flex;flex-direction:column;gap:4px; }
+.filter-group label { font-size:12px;color:var(--text-secondary);font-weight:500; }
+.filter-group select, .filter-group input {
+  background:var(--bg-input);border:1px solid var(--border);color:var(--text-primary);
+  padding:8px 12px;border-radius:6px;font-size:13px;min-width:160px;outline:none;
+}
+.filter-group select:focus, .filter-group input:focus { border-color:var(--accent); }
+.modal-overlay {
+  display:none;position:fixed;top:0;left:0;right:0;bottom:0;
+  background:rgba(0,0,0,0.7);z-index:1000;align-items:center;justify-content:center;
+}
+.modal-overlay.show { display:flex; }
+.modal {
+  background:var(--bg-secondary);border-radius:var(--radius);
+  max-width:800px;width:90%;max-height:85vh;overflow-y:auto;box-shadow:var(--shadow);
+}
+.modal-header {
+  display:flex;justify-content:space-between;align-items:center;
+  padding:16px 20px;border-bottom:1px solid var(--border);
+}
+.modal-header h3 { font-size:16px; }
+.modal-close { background:none;border:none;color:var(--text-secondary);font-size:22px;cursor:pointer; }
+.modal-close:hover { color:var(--text-primary); }
+.modal-body { padding:20px; }
+.form-grid {
+  display:grid;grid-template-columns:1fr 1fr;gap:16px;
+}
+.form-group { display:flex;flex-direction:column;gap:4px; }
+.form-group.full-width { grid-column:1/-1; }
+.form-group label { font-size:12px;color:var(--text-secondary);font-weight:500; }
+.form-group input, .form-group select, .form-group textarea {
+  background:var(--bg-input);border:1px solid var(--border);color:var(--text-primary);
+  padding:8px 12px;border-radius:6px;font-size:13px;outline:none;
+}
+.form-group textarea { min-height:80px;resize:vertical; }
+.form-group input:focus, .form-group select:focus, .form-group textarea:focus { border-color:var(--accent); }
+.charts-grid { display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-bottom:20px; }
+.chart-card { background:var(--bg-card);border-radius:var(--radius);padding:20px; }
+.chart-card h4 { font-size:14px;margin-bottom:16px;color:var(--text-secondary); }
+.chart-card.full-width { grid-column:1/-1; }
+.chart-container { position:relative;width:100%;min-height:280px; }
+.annotation-canvas-wrap {
+  position:relative;background:var(--bg-input);border-radius:6px;
+  overflow:hidden;margin-bottom:12px;
+}
+.annotation-canvas-wrap canvas { display:block;max-width:100%; }
+.annotation-toolbar {
+  display:flex;gap:8px;align-items:center;margin-bottom:12px;flex-wrap:wrap;
+}
+.toolbar-btn {
+  padding:6px 14px;border:1px solid var(--border);background:transparent;
+  color:var(--text-secondary);border-radius:4px;font-size:12px;cursor:pointer;
+}
+.toolbar-btn.active { background:var(--accent);border-color:var(--accent);color:#fff; }
+.toolbar-btn:hover { border-color:var(--accent);color:var(--accent); }
+.toolbar-btn.active:hover { color:#fff; }
+.empty-state { text-align:center;padding:60px 20px;color:var(--text-muted); }
+.empty-state .icon { font-size:48px;margin-bottom:12px; }
+.empty-state p { font-size:14px; }
+.pagination {
+  display:flex;align-items:center;justify-content:space-between;padding:12px 0;
+  font-size:13px;color:var(--text-secondary);
+}
+.pagination-buttons { display:flex;gap:8px; }
+.tag-list { display:flex;gap:4px;flex-wrap:wrap; }
+.tag {
+  display:inline-block;padding:2px 8px;border-radius:4px;font-size:11px;
+  background:var(--bg-input);color:var(--text-secondary);border:1px solid var(--border);
+}
+.progress-bar-wrap { background:var(--bg-input);border-radius:4px;height:8px;overflow:hidden; }
+.progress-bar-fill { height:100%;border-radius:4px;transition:width 0.3s; }
+.detail-grid {
+  display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));
+  gap:12px;margin-bottom:20px;
+}
+.detail-item label { display:block;font-size:11px;color:var(--text-muted);margin-bottom:2px; }
+.detail-item span { font-size:14px;font-weight:500; }
+@media (max-width:768px) {
+  .filter-bar{flex-direction:column;}
+  .filter-group select,.filter-group input{min-width:100%;}
+  .charts-grid{grid-template-columns:1fr;}
+  .form-grid{grid-template-columns:1fr;}
+  .stats-cards{grid-template-columns:1fr 1fr;}
+}
+</style>
+</head>
+<body>
+
+<header class="app-header">
+  <h1>模型管理（深度学习选配）<span class="status-dot"></span></h1>
+</header>
+
+<nav class="tab-nav">
+  <button class="tab-btn active" data-tab="versions">模型版本</button>
+  <button class="tab-btn" data-tab="annotation">样本标注</button>
+  <button class="tab-btn" data-tab="abtest">A/B 测试</button>
+  <button class="tab-btn" data-tab="retrain">自动重训</button>
+</nav>
+
+<section class="tab-content active" id="tab-versions">
+  <div class="stats-cards" id="version-stats"></div>
+
+  <div class="filter-bar">
+    <div class="filter-group">
+      <label>模型名称</label>
+      <input type="text" id="v-model-name" placeholder="全部">
+    </div>
+    <div class="filter-group">
+      <label>算法类型</label>
+      <select id="v-algo-type">
+        <option value="">全部</option>
+        <option value="classification">分类</option>
+        <option value="object_detection">目标检测</option>
+        <option value="segmentation">分割</option>
+      </select>
+    </div>
+    <div class="filter-group">
+      <label>状态</label>
+      <select id="v-status">
+        <option value="">全部</option>
+        <option value="draft">草稿</option>
+        <option value="staging">预发布</option>
+        <option value="canary">灰度</option>
+        <option value="production">生产</option>
+        <option value="deprecated">已弃用</option>
+      </select>
+    </div>
+    <button class="btn btn-primary" id="btn-refresh-versions">刷新</button>
+    <button class="btn btn-success" id="btn-upload-model">上传新模型</button>
+  </div>
+
+  <div id="versions-table-wrap"></div>
+</section>
+
+<section class="tab-content" id="tab-annotation">
+  <div class="filter-bar">
+    <div class="filter-group">
+      <label>检测ID</label>
+      <input type="text" id="a-detection-id" placeholder="全部">
+    </div>
+    <div class="filter-group">
+      <label>标注类型</label>
+      <select id="a-annotation-type">
+        <option value="">全部</option>
+        <option value="false_positive">误检（假阳性）</option>
+        <option value="false_negative">漏检（假阴性）</option>
+        <option value="defect_type_correction">缺陷类型修正</option>
+        <option value="bbox_adjustment">位置调整</option>
+      </select>
+    </div>
+    <div class="filter-group">
+      <label>标注人</label>
+      <input type="text" id="a-annotator" placeholder="全部">
+    </div>
+    <button class="btn btn-primary" id="btn-refresh-annotations">刷新</button>
+    <button class="btn btn-success" id="btn-create-annotation">新建标注</button>
+  </div>
+
+  <div id="annotation-annotate-area" style="display:none;">
+    <div class="annotation-toolbar" id="annotation-toolbar">
+      <button class="toolbar-btn active" data-tool="select">选择</button>
+      <button class="toolbar-btn" data-tool="rect">画框</button>
+      <div class="filter-group" style="margin:0;">
+        <label>修正缺陷类型</label>
+        <select id="anno-corrected-type" style="min-width:120px;padding:4px 8px;">
+          <option value="scratch">划痕</option>
+          <option value="dirt">污点</option>
+          <option value="dent">凹坑</option>
+          <option value="crack">裂纹</option>
+          <option value="missing">缺件</option>
+          <option value="stain">色斑</option>
+          <option value="deformation">变形</option>
+          <option value="bubble">气泡</option>
+          <option value="unknown">未知</option>
+        </select>
+      </div>
+      <button class="btn btn-sm btn-success" id="btn-save-annotation">保存标注</button>
+      <button class="btn btn-sm btn-outline" id="btn-cancel-annotation">取消</button>
+    </div>
+    <div class="annotation-canvas-wrap">
+      <canvas id="annotation-canvas" width="800" height="600"></canvas>
+    </div>
+  </div>
+
+  <div id="annotations-table-wrap"></div>
+  <div class="pagination" id="annotation-pagination" style="display:none;">
+    <span id="ann-page-info"></span>
+    <div class="pagination-buttons">
+      <button class="btn btn-outline" id="ann-btn-prev">上一页</button>
+      <button class="btn btn-outline" id="ann-btn-next">下一页</button>
+    </div>
+  </div>
+</section>
+
+<section class="tab-content" id="tab-abtest">
+  <div class="filter-bar">
+    <div class="filter-group">
+      <label>状态</label>
+      <select id="ab-status">
+        <option value="">全部</option>
+        <option value="pending">待启动</option>
+        <option value="running">运行中</option>
+        <option value="completed">已完成</option>
+      </select>
+    </div>
+    <button class="btn btn-primary" id="btn-refresh-abtests">刷新</button>
+    <button class="btn btn-success" id="btn-create-abtest">创建 A/B 测试</button>
+  </div>
+
+  <div id="abtests-table-wrap"></div>
+
+  <div class="charts-grid" id="abtest-charts" style="display:none;">
+    <div class="chart-card full-width">
+      <h4>A/B 测试对比</h4>
+      <div class="chart-container"><canvas id="chart-ab-compare"></canvas></div>
+    </div>
+  </div>
+</section>
+
+<section class="tab-content" id="tab-retrain">
+  <div class="stats-cards" id="retrain-stats"></div>
+
+  <div class="filter-bar">
+    <div class="filter-group">
+      <label>状态</label>
+      <select id="rt-status">
+        <option value="">全部</option>
+        <option value="pending">待处理</option>
+        <option value="collecting">收集样本</option>
+        <option value="training">训练中</option>
+        <option value="completed">已完成</option>
+        <option value="failed">失败</option>
+      </select>
+    </div>
+    <button class="btn btn-primary" id="btn-refresh-retrains">刷新</button>
+    <button class="btn btn-warning" id="btn-check-retrain">手动检查触发</button>
+  </div>
+
+  <div id="retrains-table-wrap"></div>
+
+  <div class="charts-grid">
+    <div class="chart-card full-width">
+      <h4>误检/漏检率趋势</h4>
+      <div class="chart-container"><canvas id="chart-error-trend"></canvas></div>
+    </div>
+  </div>
+</section>
+
+<div class="modal-overlay" id="upload-modal">
+  <div class="modal">
+    <div class="modal-header">
+      <h3>上传新模型</h3>
+      <button class="modal-close" onclick="closeModal('upload-modal')">&times;</button>
+    </div>
+    <div class="modal-body">
+      <div class="form-grid">
+        <div class="form-group">
+          <label>模型名称 *</label>
+          <input type="text" id="up-model-name" placeholder="如: defect_detector">
+        </div>
+        <div class="form-group">
+          <label>版本标签 *</label>
+          <input type="text" id="up-version-tag" placeholder="如: v2.1.0">
+        </div>
+        <div class="form-group">
+          <label>算法类型 *</label>
+          <select id="up-algo-type">
+            <option value="classification">分类</option>
+            <option value="object_detection">目标检测</option>
+            <option value="segmentation">分割</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>模型文件路径 *</label>
+          <input type="text" id="up-file-path" placeholder="./models/new_model.onnx">
+        </div>
+        <div class="form-group">
+          <label>父版本ID (可选)</label>
+          <input type="text" id="up-parent-id" placeholder="">
+        </div>
+        <div class="form-group full-width">
+          <label>描述</label>
+          <textarea id="up-description" placeholder="模型变更说明..."></textarea>
+        </div>
+      </div>
+      <div style="margin-top:16px;text-align:right;">
+        <button class="btn btn-outline" onclick="closeModal('upload-modal')" style="margin-right:8px;">取消</button>
+        <button class="btn btn-primary" id="btn-do-upload">确认上传</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="abtest-modal">
+  <div class="modal">
+    <div class="modal-header">
+      <h3>创建 A/B 测试</h3>
+      <button class="modal-close" onclick="closeModal('abtest-modal')">&times;</button>
+    </div>
+    <div class="modal-body">
+      <div class="form-grid">
+        <div class="form-group full-width">
+          <label>测试名称 *</label>
+          <input type="text" id="ab-name" placeholder="如: v2.1 vs v2.2 对比测试">
+        </div>
+        <div class="form-group">
+          <label>模型A版本ID (当前生产) *</label>
+          <input type="text" id="ab-model-a" placeholder="">
+        </div>
+        <div class="form-group">
+          <label>模型B版本ID (候选) *</label>
+          <input type="text" id="ab-model-b" placeholder="">
+        </div>
+        <div class="form-group">
+          <label>流量分配 (%)</label>
+          <input type="number" id="ab-traffic" value="50" min="1" max="99">
+        </div>
+        <div class="form-group">
+          <label>最小样本量</label>
+          <input type="number" id="ab-min-samples" value="1000">
+        </div>
+        <div class="form-group full-width">
+          <label>目标产线 (逗号分隔, 留空为全部)</label>
+          <input type="text" id="ab-target-lines" placeholder="line-001,line-002">
+        </div>
+        <div class="form-group full-width">
+          <label>备注</label>
+          <textarea id="ab-notes" placeholder=""></textarea>
+        </div>
+      </div>
+      <div style="margin-top:16px;text-align:right;">
+        <button class="btn btn-outline" onclick="closeModal('abtest-modal')" style="margin-right:8px;">取消</button>
+        <button class="btn btn-primary" id="btn-do-create-abtest">创建并启动</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="annotate-modal">
+  <div class="modal" style="max-width:900px;">
+    <div class="modal-header">
+      <h3>新建标注</h3>
+      <button class="modal-close" onclick="closeModal('annotate-modal')">&times;</button>
+    </div>
+    <div class="modal-body">
+      <div class="form-grid">
+        <div class="form-group">
+          <label>检测ID *</label>
+          <input type="text" id="ann-detection-id" placeholder="">
+        </div>
+        <div class="form-group">
+          <label>图像路径</label>
+          <input type="text" id="ann-image-path" placeholder="">
+        </div>
+        <div class="form-group">
+          <label>标注类型 *</label>
+          <select id="ann-type">
+            <option value="false_positive">误检（假阳性）</option>
+            <option value="false_negative">漏检（假阴性）</option>
+            <option value="defect_type_correction">缺陷类型修正</option>
+            <option value="bbox_adjustment">位置调整</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>修正后缺陷类型</label>
+          <select id="ann-corrected-defect">
+            <option value="">无</option>
+            <option value="scratch">划痕</option>
+            <option value="dirt">污点</option>
+            <option value="dent">凹坑</option>
+            <option value="crack">裂纹</option>
+            <option value="missing">缺件</option>
+            <option value="stain">色斑</option>
+            <option value="deformation">变形</option>
+            <option value="bubble">气泡</option>
+            <option value="unknown">未知</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>原始缺陷类型</label>
+          <input type="text" id="ann-original-defect" placeholder="">
+        </div>
+        <div class="form-group full-width">
+          <label>备注</label>
+          <textarea id="ann-notes" placeholder=""></textarea>
+        </div>
+      </div>
+      <div style="margin-top:16px;text-align:right;">
+        <button class="btn btn-outline" onclick="closeModal('annotate-modal')" style="margin-right:8px;">取消</button>
+        <button class="btn btn-primary" id="btn-do-annotate">保存标注</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="detail-modal">
+  <div class="modal">
+    <div class="modal-header">
+      <h3 id="detail-title">详情</h3>
+      <button class="modal-close" onclick="closeModal('detail-modal')">&times;</button>
+    </div>
+    <div class="modal-body" id="detail-body"></div>
+  </div>
+</div>
+
+<script>
+const API = '/api/model-management';
+const DEFECT_TYPES = {
+  scratch:'划痕',dirt:'污点',dent:'凹坑',crack:'裂纹',
+  missing:'缺件',stain:'色斑',deformation:'变形',bubble:'气泡',unknown:'未知'
+};
+const STATUS_LABELS = {
+  draft:'草稿',staging:'预发布',canary:'灰度',production:'生产',
+  deprecated:'已弃用',archived:'已归档',
+  pending:'待启动',running:'运行中',completed:'已完成',cancelled:'已取消',
+  collecting:'收集样本',training:'训练中',failed:'失败'
+};
+const ANNO_TYPE_LABELS = {
+  false_positive:'误检(假阳性)',false_negative:'漏检(假阴性)',
+  defect_type_correction:'缺陷类型修正',bbox_adjustment:'位置调整'
+};
+const ALGO_LABELS = {
+  classification:'分类',object_detection:'目标检测',segmentation:'分割',
+  edge_detection:'边缘检测',template_matching:'模板匹配',gray_diff:'灰度差分'
+};
+
+let annOffset = 0;
+const annLimit = 50;
+let annTotal = 0;
+let abCompareChart = null;
+let errorTrendChart = null;
+let authToken = '';
+
+function fmtTime(ts) {
+  if (!ts) return '-';
+  const d = new Date(ts * 1000);
+  const p = n => String(n).padStart(2,'0');
+  return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+}
+
+function badgeClass(status) {
+  const map = {production:'production',canary:'canary',staging:'staging',draft:'draft',
+    deprecated:'deprecated',running:'running',pending:'pending',completed:'completed',
+    failed:'failed',collecting:'collecting',training:'training'};
+  return 'badge badge-' + (map[status]||'draft');
+}
+
+async function apiGet(path) {
+  const headers = {};
+  if (authToken) headers['Authorization'] = 'Bearer ' + authToken;
+  const res = await fetch(API + path, {headers});
+  if (!res.ok) { const e = await res.json().catch(()=>({error:res.statusText})); throw new Error(e.error||`HTTP ${res.status}`); }
+  return res.json();
+}
+
+async function apiPost(path, body) {
+  const headers = {'Content-Type':'application/json'};
+  if (authToken) headers['Authorization'] = 'Bearer ' + authToken;
+  const res = await fetch(API + path, {method:'POST',headers,body:JSON.stringify(body)});
+  if (!res.ok) { const e = await res.json().catch(()=>({error:res.statusText})); throw new Error(e.error||`HTTP ${res.status}`); }
+  return res.json();
+}
+
+function openModal(id) { document.getElementById(id).classList.add('show'); }
+function closeModal(id) { document.getElementById(id).classList.remove('show'); }
+
+async function loadVersionStats() {
+  try {
+    const stats = await apiGet('/status');
+    const vs = stats.versions_by_status || {};
+    document.getElementById('version-stats').innerHTML = `
+      <div class="stat-card"><div class="stat-label">模型版本总数</div><div class="stat-value">${stats.total_versions||0}</div></div>
+      <div class="stat-card green"><div class="stat-label">生产版本</div><div class="stat-value">${vs.production||0}</div></div>
+      <div class="stat-card orange"><div class="stat-label">灰度版本</div><div class="stat-value">${vs.canary||0}</div></div>
+      <div class="stat-card purple"><div class="stat-label">预发布版本</div><div class="stat-value">${vs.staging||0}</div></div>
+      <div class="stat-card"><div class="stat-label">草稿版本</div><div class="stat-value">${vs.draft||0}</div></div>
+      <div class="stat-card cyan"><div class="stat-label">标注总数</div><div class="stat-value">${stats.total_annotations||0}</div></div>
+    `;
+  } catch(e) { console.error('Failed to load version stats:', e); }
+}
+
+async function loadVersions() {
+  const modelName = document.getElementById('v-model-name').value;
+  const algoType = document.getElementById('v-algo-type').value;
+  const status = document.getElementById('v-status').value;
+  const params = new URLSearchParams();
+  if (modelName) params.set('model_name', modelName);
+  if (algoType) params.set('algorithm_type', algoType);
+  if (status) params.set('status', status);
+
+  try {
+    const data = await apiGet('/versions?' + params.toString());
+    const versions = data.versions || [];
+    if (!versions.length) {
+      document.getElementById('versions-table-wrap').innerHTML = '<div class="empty-state"><div class="icon">&#128230;</div><p>暂无模型版本</p></div>';
+      return;
+    }
+    let html = `<table class="results-table"><thead><tr>
+      <th>模型名称</th><th>版本</th><th>算法</th><th>状态</th><th>大小</th>
+      <th>灰度产线</th><th>上传者</th><th>时间</th><th>操作</th>
+    </tr></thead><tbody>`;
+    versions.forEach(v => {
+      html += `<tr>
+        <td>${v.model_name}</td>
+        <td><strong>${v.version_tag}</strong></td>
+        <td>${ALGO_LABELS[v.algorithm_type]||v.algorithm_type}</td>
+        <td><span class="${badgeClass(v.status)}">${STATUS_LABELS[v.status]||v.status}</span></td>
+        <td>${v.file_size_mb.toFixed(2)} MB</td>
+        <td>${v.canary_lines&&v.canary_lines.length ? '<div class="tag-list">'+v.canary_lines.map(l=>'<span class="tag">'+l+'</span>').join('')+'</div>' : '-'}</td>
+        <td>${v.uploaded_by}</td>
+        <td style="font-size:12px;">${fmtTime(v.created_at)}</td>
+        <td>
+          ${v.status==='draft'||v.status==='staging'?`<button class="btn btn-sm btn-warning" onclick="promoteCanary('${v.version_id}')">灰度发布</button>`:''}
+          ${v.status==='canary'?`<button class="btn btn-sm btn-success" onclick="promoteProduction('${v.version_id}')">全量发布</button>`:''}
+          ${v.status!=='production'&&v.status!=='deprecated'?`<button class="btn btn-sm btn-outline" onclick="rollbackTo('${v.version_id}')">回滚至此</button>`:''}
+        </td>
+      </tr>`;
+    });
+    html += '</tbody></table>';
+    document.getElementById('versions-table-wrap').innerHTML = html;
+  } catch(e) {
+    document.getElementById('versions-table-wrap').innerHTML = `<div class="empty-state"><div class="icon">&#9888;</div><p>加载失败: ${e.message}</p></div>`;
+  }
+}
+
+async function uploadModel() {
+  const body = {
+    model_name: document.getElementById('up-model-name').value,
+    version_tag: document.getElementById('up-version-tag').value,
+    file_path: document.getElementById('up-file-path').value,
+    algorithm_type: document.getElementById('up-algo-type').value,
+    description: document.getElementById('up-description').value,
+    parent_version_id: document.getElementById('up-parent-id').value
+  };
+  if (!body.model_name || !body.version_tag || !body.file_path) {
+    alert('请填写必填项：模型名称、版本标签、文件路径');
+    return;
+  }
+  try {
+    const data = await apiPost('/upload', body);
+    if (data.success) {
+      closeModal('upload-modal');
+      loadVersions();
+      loadVersionStats();
+      alert('模型上传成功！');
+    } else {
+      alert('上传失败: ' + (data.error||'未知错误'));
+    }
+  } catch(e) { alert('上传失败: ' + e.message); }
+}
+
+async function promoteCanary(versionId) {
+  const lines = prompt('请输入灰度产线ID（逗号分隔）:', 'line-001');
+  if (!lines) return;
+  const traffic = prompt('灰度流量比例 (%):', '10');
+  try {
+    const data = await apiPost('/canary', {
+      version_id: versionId,
+      canary_lines: lines.split(',').map(s=>s.trim()),
+      traffic_percent: parseFloat(traffic) || 10.0
+    });
+    if (data.success) { loadVersions(); loadVersionStats(); alert('灰度发布已设置'); }
+    else { alert('操作失败: ' + (data.error||'')); }
+  } catch(e) { alert('操作失败: ' + e.message); }
+}
+
+async function promoteProduction(versionId) {
+  if (!confirm('确认将此版本全量发布为生产版本？')) return;
+  try {
+    const data = await apiPost('/promote', {version_id: versionId});
+    if (data.success) { loadVersions(); loadVersionStats(); alert('已全量发布'); }
+    else { alert('操作失败: ' + (data.error||'')); }
+  } catch(e) { alert('操作失败: ' + e.message); }
+}
+
+async function rollbackTo(versionId) {
+  if (!confirm('确认回滚至此版本？当前生产版本将被标记为已弃用。')) return;
+  try {
+    const data = await apiPost('/rollback', {version_id: versionId});
+    if (data.success) { loadVersions(); loadVersionStats(); alert('已回滚'); }
+    else { alert('操作失败: ' + (data.error||'')); }
+  } catch(e) { alert('操作失败: ' + e.message); }
+}
+
+async function loadAnnotations() {
+  const detectionId = document.getElementById('a-detection-id').value;
+  const annType = document.getElementById('a-annotation-type').value;
+  const annotator = document.getElementById('a-annotator').value;
+  const params = new URLSearchParams({limit:annLimit,offset:annOffset});
+  if (detectionId) params.set('detection_id', detectionId);
+  if (annType) params.set('annotation_type', annType);
+  if (annotator) params.set('annotator', annotator);
+
+  try {
+    const data = await apiGet('/annotations?' + params.toString());
+    annTotal = data.total || 0;
+    const records = data.annotations || [];
+    if (!records.length) {
+      document.getElementById('annotations-table-wrap').innerHTML = '<div class="empty-state"><div class="icon">&#128221;</div><p>暂无标注记录</p></div>';
+      document.getElementById('annotation-pagination').style.display = 'none';
+      return;
+    }
+    let html = `<table class="results-table"><thead><tr>
+      <th>检测ID</th><th>标注类型</th><th>原始缺陷</th><th>修正缺陷</th>
+      <th>标注人</th><th>时间</th><th>备注</th>
+    </tr></thead><tbody>`;
+    records.forEach(r => {
+      html += `<tr>
+        <td style="font-family:monospace;font-size:12px;">${r.detection_id.substring(0,8)}...</td>
+        <td><span class="badge badge-canary">${ANNO_TYPE_LABELS[r.annotation_type]||r.annotation_type}</span></td>
+        <td>${DEFECT_TYPES[r.original_defect_type]||r.original_defect_type||'-'}</td>
+        <td>${DEFECT_TYPES[r.corrected_defect_type]||r.corrected_defect_type||'-'}</td>
+        <td>${r.annotator}</td>
+        <td style="font-size:12px;">${fmtTime(r.timestamp)}</td>
+        <td style="font-size:12px;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${r.notes||'-'}</td>
+      </tr>`;
+    });
+    html += '</tbody></table>';
+    document.getElementById('annotations-table-wrap').innerHTML = html;
+
+    const pag = document.getElementById('annotation-pagination');
+    if (annTotal > annLimit) {
+      pag.style.display = 'flex';
+      const from = annOffset + 1;
+      const to = Math.min(annOffset + annLimit, annTotal);
+      document.getElementById('ann-page-info').textContent = `${from}-${to} / ${annTotal}`;
+      document.getElementById('ann-btn-prev').disabled = annOffset <= 0;
+      document.getElementById('ann-btn-next').disabled = annOffset + annLimit >= annTotal;
+    } else {
+      pag.style.display = 'none';
+    }
+  } catch(e) {
+    document.getElementById('annotations-table-wrap').innerHTML = `<div class="empty-state"><div class="icon">&#9888;</div><p>加载失败: ${e.message}</p></div>`;
+  }
+}
+
+async function createAnnotation() {
+  const body = {
+    detection_id: document.getElementById('ann-detection-id').value,
+    image_path: document.getElementById('ann-image-path').value,
+    annotation_type: document.getElementById('ann-type').value,
+    original_defect_type: document.getElementById('ann-original-defect').value,
+    corrected_defect_type: document.getElementById('ann-corrected-defect').value,
+    notes: document.getElementById('ann-notes').value
+  };
+  if (!body.detection_id) { alert('请填写检测ID'); return; }
+  try {
+    const data = await apiPost('/annotate', body);
+    if (data.success) {
+      closeModal('annotate-modal');
+      loadAnnotations();
+      loadVersionStats();
+      alert('标注已保存');
+    } else { alert('保存失败: ' + (data.error||'')); }
+  } catch(e) { alert('保存失败: ' + e.message); }
+}
+
+async function loadABTests() {
+  const status = document.getElementById('ab-status').value;
+  const params = new URLSearchParams();
+  if (status) params.set('status', status);
+
+  try {
+    const data = await apiGet('/ab-tests?' + params.toString());
+    const tests = data.tests || [];
+    if (!tests.length) {
+      document.getElementById('abtests-table-wrap').innerHTML = '<div class="empty-state"><div class="icon">&#9879;</div><p>暂无 A/B 测试</p></div>';
+      document.getElementById('abtest-charts').style.display = 'none';
+      return;
+    }
+    let html = `<table class="results-table"><thead><tr>
+      <th>名称</th><th>模型A</th><th>模型B</th><th>流量分配</th>
+      <th>状态</th><th>样本A/B</th><th>开始时间</th><th>操作</th>
+    </tr></thead><tbody>`;
+    tests.forEach(t => {
+      const aInfo = t.model_a_version_id ? t.model_a_version_id.substring(0,8) : '-';
+      const bInfo = t.model_b_version_id ? t.model_b_version_id.substring(0,8) : '-';
+      html += `<tr>
+        <td>${t.name}</td>
+        <td style="font-family:monospace;font-size:12px;">${aInfo}...</td>
+        <td style="font-family:monospace;font-size:12px;">${bInfo}...</td>
+        <td>${t.traffic_split_percent}% / ${100-t.traffic_split_percent}%</td>
+        <td><span class="${badgeClass(t.status)}">${STATUS_LABELS[t.status]||t.status}</span></td>
+        <td>${t.sample_count_a} / ${t.sample_count_b}</td>
+        <td style="font-size:12px;">${t.started_at ? fmtTime(t.started_at) : '-'}</td>
+        <td>
+          ${t.status==='pending'?`<button class="btn btn-sm btn-success" onclick="startABTest('${t.test_id}')">启动</button>`:''}
+          ${t.status==='running'?`
+            <button class="btn btn-sm btn-warning" onclick="stopABTest('${t.test_id}','a')">A胜出</button>
+            <button class="btn btn-sm btn-warning" onclick="stopABTest('${t.test_id}','b')">B胜出</button>
+            <button class="btn btn-sm btn-success" onclick="switchFull('${t.test_id}')">全量切换B</button>
+          `:''}
+          <button class="btn btn-sm btn-outline" onclick="showABDetail('${t.test_id}')">详情</button>
+        </td>
+      </tr>`;
+    });
+    html += '</tbody></table>';
+    document.getElementById('abtests-table-wrap').innerHTML = html;
+
+    const runningTests = tests.filter(t=>t.status==='running');
+    if (runningTests.length) {
+      document.getElementById('abtest-charts').style.display = 'grid';
+      renderABCompareChart(runningTests[0]);
+    } else {
+      document.getElementById('abtest-charts').style.display = 'none';
+    }
+  } catch(e) {
+    document.getElementById('abtests-table-wrap').innerHTML = `<div class="empty-state"><div class="icon">&#9888;</div><p>加载失败: ${e.message}</p></div>`;
+  }
+}
+
+function renderABCompareChart(test) {
+  const ctx = document.getElementById('chart-ab-compare');
+  const labels = ['准确率', '推理速度(ms)', '误检率(%)', '漏检率(%)'];
+  const mA = test.metrics_a || {};
+  const mB = test.metrics_b || {};
+  const dataA = [mA.accuracy||0, mA.avg_inference_ms||0, mA.false_positive_rate*100||0, mA.false_negative_rate*100||0];
+  const dataB = [mB.accuracy||0, mB.avg_inference_ms||0, mB.false_positive_rate*100||0, mB.false_negative_rate*100||0];
+
+  if (abCompareChart) abCompareChart.destroy();
+  abCompareChart = new Chart(ctx, {
+    type:'bar',
+    data:{
+      labels,
+      datasets:[
+        {label:'模型A (当前)',data:dataA,backgroundColor:'rgba(59,159,245,0.7)',borderColor:'#3b9ff5',borderWidth:1},
+        {label:'模型B (候选)',data:dataB,backgroundColor:'rgba(46,204,113,0.7)',borderColor:'#2ecc71',borderWidth:1}
+      ]
+    },
+    options:{
+      responsive:true,maintainAspectRatio:false,
+      scales:{
+        y:{ticks:{color:'#8fa3b5'},grid:{color:'rgba(45,74,94,0.3)'}},
+        x:{ticks:{color:'#8fa3b5'},grid:{color:'rgba(45,74,94,0.15)'}}
+      },
+      plugins:{legend:{labels:{color:'#e8edf2'}}}
+    }
+  });
+}
+
+async function createABTest() {
+  const targetLinesStr = document.getElementById('ab-target-lines').value;
+  const body = {
+    name: document.getElementById('ab-name').value,
+    model_a_version_id: document.getElementById('ab-model-a').value,
+    model_b_version_id: document.getElementById('ab-model-b').value,
+    traffic_split_percent: parseFloat(document.getElementById('ab-traffic').value) || 50,
+    target_lines: targetLinesStr ? targetLinesStr.split(',').map(s=>s.trim()) : [],
+    min_sample_size: parseInt(document.getElementById('ab-min-samples').value) || 1000,
+    notes: document.getElementById('ab-notes').value
+  };
+  if (!body.name || !body.model_a_version_id || !body.model_b_version_id) {
+    alert('请填写必填项'); return;
+  }
+  try {
+    const data = await apiPost('/ab-test/create', body);
+    if (data.success) {
+      closeModal('abtest-modal');
+      loadABTests();
+      if (data.test && data.test.test_id) {
+        await apiPost('/ab-test/start', {test_id: data.test.test_id});
+        loadABTests();
+      }
+      alert('A/B 测试已创建并启动');
+    } else { alert('创建失败: ' + (data.error||'')); }
+  } catch(e) { alert('创建失败: ' + e.message); }
+}
+
+async function startABTest(testId) {
+  try {
+    const data = await apiPost('/ab-test/start', {test_id: testId});
+    if (data.success) { loadABTests(); alert('A/B 测试已启动'); }
+    else { alert('启动失败'); }
+  } catch(e) { alert('启动失败: ' + e.message); }
+}
+
+async function stopABTest(testId, winner) {
+  if (!confirm(`确认以模型${winner.toUpperCase()}为胜出方结束测试？`)) return;
+  try {
+    const data = await apiPost('/ab-test/stop', {test_id: testId, winner: winner});
+    if (data.success) { loadABTests(); alert('A/B 测试已结束'); }
+    else { alert('操作失败'); }
+  } catch(e) { alert('操作失败: ' + e.message); }
+}
+
+async function switchFull(testId) {
+  if (!confirm('确认一键全量切换到模型B？此操作将使模型B成为新的生产版本。')) return;
+  try {
+    const data = await apiPost('/ab-test/switch-full', {test_id: testId});
+    if (data.success) { loadABTests(); loadVersions(); loadVersionStats(); alert('已全量切换'); }
+    else { alert('操作失败'); }
+  } catch(e) { alert('操作失败: ' + e.message); }
+}
+
+async function showABDetail(testId) {
+  try {
+    const data = await apiGet('/ab-tests');
+    const test = (data.tests||[]).find(t=>t.test_id===testId);
+    if (!test) return;
+    document.getElementById('detail-title').textContent = 'A/B 测试详情 - ' + test.name;
+    document.getElementById('detail-body').innerHTML = `
+      <div class="detail-grid">
+        <div class="detail-item"><label>测试ID</label><span style="font-family:monospace;">${test.test_id}</span></div>
+        <div class="detail-item"><label>状态</label><span class="${badgeClass(test.status)}">${STATUS_LABELS[test.status]||test.status}</span></div>
+        <div class="detail-item"><label>流量分配</label><span>${test.traffic_split_percent}% / ${100-test.traffic_split_percent}%</span></div>
+        <div class="detail-item"><label>最小样本量</label><span>${test.min_sample_size}</span></div>
+        <div class="detail-item"><label>模型A样本数</label><span>${test.sample_count_a}</span></div>
+        <div class="detail-item"><label>模型B样本数</label><span>${test.sample_count_b}</span></div>
+        <div class="detail-item"><label>开始时间</label><span>${fmtTime(test.started_at)}</span></div>
+        <div class="detail-item"><label>结束时间</label><span>${fmtTime(test.ended_at)}</span></div>
+        <div class="detail-item"><label>胜出方</label><span>${test.winner||'-'}</span></div>
+        <div class="detail-item"><label>创建人</label><span>${test.created_by}</span></div>
+      </div>
+      <h4 style="margin:16px 0 8px;color:var(--text-secondary);">模型A指标</h4>
+      <pre style="background:var(--bg-input);padding:12px;border-radius:6px;font-size:12px;overflow-x:auto;">${JSON.stringify(test.metrics_a,null,2)}</pre>
+      <h4 style="margin:16px 0 8px;color:var(--text-secondary);">模型B指标</h4>
+      <pre style="background:var(--bg-input);padding:12px;border-radius:6px;font-size:12px;overflow-x:auto;">${JSON.stringify(test.metrics_b,null,2)}</pre>
+    `;
+    openModal('detail-modal');
+  } catch(e) { alert('加载详情失败: ' + e.message); }
+}
+
+async function loadRetrainStats() {
+  try {
+    const stats = await apiGet('/status');
+    const rt = stats.retrain_thresholds || {};
+    document.getElementById('retrain-stats').innerHTML = `
+      <div class="stat-card red"><div class="stat-label">待处理重训</div><div class="stat-value">${stats.pending_retrains||0}</div></div>
+      <div class="stat-card orange"><div class="stat-label">重训触发总数</div><div class="stat-value">${stats.total_retrain_triggers||0}</div></div>
+      <div class="stat-card purple"><div class="stat-label">误检率阈值</div><div class="stat-value">${(rt.false_positive||0.05)*100}%</div></div>
+      <div class="stat-card cyan"><div class="stat-label">漏检率阈值</div><div class="stat-value">${(rt.false_negative||0.05)*100}%</div></div>
+      <div class="stat-card"><div class="stat-label">连续天数阈值</div><div class="stat-value">${rt.consecutive_days||7}天</div></div>
+    `;
+  } catch(e) { console.error('Failed:', e); }
+}
+
+async function loadRetrainTriggers() {
+  const status = document.getElementById('rt-status').value;
+  const params = new URLSearchParams();
+  if (status) params.set('status', status);
+
+  try {
+    const data = await apiGet('/retrain-triggers?' + params.toString());
+    const triggers = data.triggers || [];
+    if (!triggers.length) {
+      document.getElementById('retrains-table-wrap').innerHTML = '<div class="empty-state"><div class="icon">&#128260;</div><p>暂无重训触发记录</p></div>';
+      return;
+    }
+    let html = `<table class="results-table"><thead><tr>
+      <th>触发原因</th><th>阈值类型</th><th>阈值</th><th>实际值</th>
+      <th>连续天数</th><th>状态</th><th>样本数</th><th>触发时间</th><th>操作</th>
+    </tr></thead><tbody>`;
+    triggers.forEach(t => {
+      html += `<tr>
+        <td style="font-size:12px;max-width:250px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${t.trigger_reason}</td>
+        <td>${t.threshold_type}</td>
+        <td>${(t.threshold_value*100).toFixed(1)}%</td>
+        <td>${(t.actual_value*100).toFixed(2)}%</td>
+        <td>${t.consecutive_days}天</td>
+        <td><span class="${badgeClass(t.status)}">${STATUS_LABELS[t.status]||t.status}</span></td>
+        <td>${t.sample_count}</td>
+        <td style="font-size:12px;">${fmtTime(t.started_at)}</td>
+        <td><button class="btn btn-sm btn-outline" onclick="showRetrainDetail('${t.trigger_id}')">详情</button></td>
+      </tr>`;
+    });
+    html += '</tbody></table>';
+    document.getElementById('retrains-table-wrap').innerHTML = html;
+  } catch(e) {
+    document.getElementById('retrains-table-wrap').innerHTML = `<div class="empty-state"><div class="icon">&#9888;</div><p>加载失败: ${e.message}</p></div>`;
+  }
+  loadRetrainStats();
+  renderErrorTrendChart();
+}
+
+async function showRetrainDetail(triggerId) {
+  try {
+    const data = await apiGet('/retrain-triggers');
+    const trigger = (data.triggers||[]).find(t=>t.trigger_id===triggerId);
+    if (!trigger) return;
+    document.getElementById('detail-title').textContent = '重训详情';
+    document.getElementById('detail-body').innerHTML = `
+      <div class="detail-grid">
+        <div class="detail-item"><label>触发ID</label><span style="font-family:monospace;">${trigger.trigger_id}</span></div>
+        <div class="detail-item"><label>触发原因</label><span>${trigger.trigger_reason}</span></div>
+        <div class="detail-item"><label>阈值类型</label><span>${trigger.threshold_type}</span></div>
+        <div class="detail-item"><label>阈值</label><span>${(trigger.threshold_value*100).toFixed(1)}%</span></div>
+        <div class="detail-item"><label>实际值</label><span>${(trigger.actual_value*100).toFixed(2)}%</span></div>
+        <div class="detail-item"><label>连续天数</label><span>${trigger.consecutive_days}</span></div>
+        <div class="detail-item"><label>产品ID</label><span>${trigger.product_id}</span></div>
+        <div class="detail-item"><label>算法类型</label><span>${ALGO_LABELS[trigger.algorithm_type]||trigger.algorithm_type}</span></div>
+        <div class="detail-item"><label>样本数</label><span>${trigger.sample_count}</span></div>
+        <div class="detail-item"><label>状态</label><span class="${badgeClass(trigger.status)}">${STATUS_LABELS[trigger.status]||trigger.status}</span></div>
+      </div>
+      ${trigger.training_log?`<h4 style="margin:16px 0 8px;color:var(--text-secondary);">训练日志</h4>
+      <pre style="background:var(--bg-input);padding:12px;border-radius:6px;font-size:11px;max-height:300px;overflow:auto;">${trigger.training_log}</pre>`:''}
+    `;
+    openModal('detail-modal');
+  } catch(e) { alert('加载详情失败: ' + e.message); }
+}
+
+async function checkRetrain() {
+  try {
+    const data = await apiPost('/retrain/check', {});
+    if (data.triggered) {
+      alert('已触发重训练！\n原因: ' + data.trigger.trigger_reason);
+    } else {
+      alert('当前误检率/漏检率未超过阈值，无需重训练');
+    }
+    loadRetrainTriggers();
+  } catch(e) { alert('检查失败: ' + e.message); }
+}
+
+function renderErrorTrendChart() {
+  const ctx = document.getElementById('chart-error-trend');
+  const now = new Date();
+  const labels = [];
+  const fpData = [];
+  const fnData = [];
+  const threshold = 5;
+  for (let i = 29; i >= 0; i--) {
+    const d = new Date(now);
+    d.setDate(d.getDate() - i);
+    labels.push(`${d.getMonth()+1}/${d.getDate()}`);
+    fpData.push(Math.random() * 8);
+    fnData.push(Math.random() * 6);
+  }
+  if (errorTrendChart) errorTrendChart.destroy();
+  errorTrendChart = new Chart(ctx, {
+    type:'line',
+    data:{
+      labels,
+      datasets:[
+        {label:'误检率(%)',data:fpData,borderColor:'#e74c3c',backgroundColor:'rgba(231,76,60,0.1)',fill:true,tension:0.3,pointRadius:2},
+        {label:'漏检率(%)',data:fnData,borderColor:'#f39c12',backgroundColor:'rgba(243,156,18,0.1)',fill:true,tension:0.3,pointRadius:2},
+        {label:'阈值',data:Array(30).fill(threshold),borderColor:'#e74c3c',borderDash:[5,5],pointRadius:0,fill:false}
+      ]
+    },
+    options:{
+      responsive:true,maintainAspectRatio:false,
+      scales:{
+        y:{ticks:{color:'#8fa3b5',callback:v=>v+'%'},grid:{color:'rgba(45,74,94,0.3)'}},
+        x:{ticks:{color:'#8fa3b5',maxRotation:45,font:{size:10}},grid:{color:'rgba(45,74,94,0.15)'}}
+      },
+      plugins:{legend:{labels:{color:'#e8edf2'}}}
+    }
+  });
+}
+
+document.querySelectorAll('.tab-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+    btn.classList.add('active');
+    document.getElementById('tab-' + btn.dataset.tab).classList.add('active');
+    if (btn.dataset.tab === 'versions') { loadVersionStats(); loadVersions(); }
+    if (btn.dataset.tab === 'annotation') { loadAnnotations(); }
+    if (btn.dataset.tab === 'abtest') { loadABTests(); }
+    if (btn.dataset.tab === 'retrain') { loadRetrainTriggers(); }
+  });
+});
+
+document.getElementById('btn-refresh-versions').addEventListener('click', () => { loadVersionStats(); loadVersions(); });
+document.getElementById('btn-upload-model').addEventListener('click', () => openModal('upload-modal'));
+document.getElementById('btn-do-upload').addEventListener('click', uploadModel);
+
+document.getElementById('btn-refresh-annotations').addEventListener('click', loadAnnotations);
+document.getElementById('btn-create-annotation').addEventListener('click', () => openModal('annotate-modal'));
+document.getElementById('btn-do-annotate').addEventListener('click', createAnnotation);
+document.getElementById('ann-btn-prev').addEventListener('click', () => { annOffset = Math.max(0, annOffset - annLimit); loadAnnotations(); });
+document.getElementById('ann-btn-next').addEventListener('click', () => { annOffset += annLimit; loadAnnotations(); });
+
+document.getElementById('btn-refresh-abtests').addEventListener('click', loadABTests);
+document.getElementById('btn-create-abtest').addEventListener('click', () => openModal('abtest-modal'));
+document.getElementById('btn-do-create-abtest').addEventListener('click', createABTest);
+
+document.getElementById('btn-refresh-retrains').addEventListener('click', loadRetrainTriggers);
+document.getElementById('btn-check-retrain').addEventListener('click', checkRetrain);
+
+loadVersionStats();
+loadVersions();
+</script>
+</body>
+</html>

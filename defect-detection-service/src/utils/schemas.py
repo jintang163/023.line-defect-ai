@@ -813,3 +813,289 @@ class DetectionRecord:
             defects_detail=row.get("defects_detail", ""),
             metadata=row.get("metadata", {}) if isinstance(row.get("metadata"), dict) else {}
         )
+
+
+class ModelVersionStatus(Enum):
+    DRAFT = "draft"
+    STAGING = "staging"
+    CANARY = "canary"
+    PRODUCTION = "production"
+    DEPRECATED = "deprecated"
+    ARCHIVED = "archived"
+
+
+class ABTestStatus(Enum):
+    PENDING = "pending"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    CANCELLED = "cancelled"
+
+
+class AnnotationType(Enum):
+    DEFECT_TYPE_CORRECTION = "defect_type_correction"
+    BBOX_ADJUSTMENT = "bbox_adjustment"
+    FALSE_POSITIVE = "false_positive"
+    FALSE_NEGATIVE = "false_negative"
+
+
+class RetrainTriggerStatus(Enum):
+    PENDING = "pending"
+    COLLECTING = "collecting"
+    TRAINING = "training"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
+@dataclass
+class ModelVersion:
+    version_id: str
+    model_name: str
+    version_tag: str
+    file_path: str
+    file_size_mb: float
+    algorithm_type: AlgorithmType
+    status: ModelVersionStatus
+    description: str
+    uploaded_by: str
+    created_at: float
+    metrics: Dict[str, Any] = field(default_factory=dict)
+    canary_lines: List[str] = field(default_factory=list)
+    canary_traffic_percent: float = 0.0
+    parent_version_id: str = ""
+    metadata: Dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def create(cls, model_name: str, version_tag: str, file_path: str,
+               file_size_mb: float, algorithm_type: AlgorithmType,
+               uploaded_by: str = "system",
+               description: str = "",
+               status: ModelVersionStatus = ModelVersionStatus.DRAFT,
+               parent_version_id: str = "",
+               metadata: Optional[Dict[str, Any]] = None) -> "ModelVersion":
+        return cls(
+            version_id=str(uuid.uuid4()),
+            model_name=model_name,
+            version_tag=version_tag,
+            file_path=file_path,
+            file_size_mb=file_size_mb,
+            algorithm_type=algorithm_type,
+            status=status,
+            description=description,
+            uploaded_by=uploaded_by,
+            created_at=time.time(),
+            parent_version_id=parent_version_id,
+            metadata=metadata or {}
+        )
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "version_id": self.version_id,
+            "model_name": self.model_name,
+            "version_tag": self.version_tag,
+            "file_path": self.file_path,
+            "file_size_mb": self.file_size_mb,
+            "algorithm_type": self.algorithm_type.value,
+            "status": self.status.value,
+            "description": self.description,
+            "uploaded_by": self.uploaded_by,
+            "created_at": self.created_at,
+            "created_at_iso": datetime.fromtimestamp(self.created_at).isoformat() if self.created_at else "",
+            "metrics": self.metrics,
+            "canary_lines": self.canary_lines,
+            "canary_traffic_percent": self.canary_traffic_percent,
+            "parent_version_id": self.parent_version_id,
+            "metadata": self.metadata
+        }
+
+
+@dataclass
+class AnnotationRecord:
+    annotation_id: str
+    detection_id: str
+    image_path: str
+    annotation_type: AnnotationType
+    original_defect_type: str
+    corrected_defect_type: str
+    original_bbox: Dict[str, float]
+    corrected_bbox: Dict[str, float]
+    annotator: str
+    timestamp: float
+    notes: str = ""
+    metadata: Dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def create(cls, detection_id: str, image_path: str,
+               annotation_type: AnnotationType,
+               original_defect_type: str = "",
+               corrected_defect_type: str = "",
+               original_bbox: Optional[Dict[str, float]] = None,
+               corrected_bbox: Optional[Dict[str, float]] = None,
+               annotator: str = "admin",
+               notes: str = "",
+               metadata: Optional[Dict[str, Any]] = None) -> "AnnotationRecord":
+        return cls(
+            annotation_id=str(uuid.uuid4()),
+            detection_id=detection_id,
+            image_path=image_path,
+            annotation_type=annotation_type,
+            original_defect_type=original_defect_type,
+            corrected_defect_type=corrected_defect_type,
+            original_bbox=original_bbox or {},
+            corrected_bbox=corrected_bbox or {},
+            annotator=annotator,
+            timestamp=time.time(),
+            notes=notes,
+            metadata=metadata or {}
+        )
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "annotation_id": self.annotation_id,
+            "detection_id": self.detection_id,
+            "image_path": self.image_path,
+            "annotation_type": self.annotation_type.value,
+            "original_defect_type": self.original_defect_type,
+            "corrected_defect_type": self.corrected_defect_type,
+            "original_bbox": self.original_bbox,
+            "corrected_bbox": self.corrected_bbox,
+            "annotator": self.annotator,
+            "timestamp": self.timestamp,
+            "timestamp_iso": datetime.fromtimestamp(self.timestamp).isoformat() if self.timestamp else "",
+            "notes": self.notes,
+            "metadata": self.metadata
+        }
+
+
+@dataclass
+class ABTestConfig:
+    test_id: str
+    name: str
+    model_a_version_id: str
+    model_b_version_id: str
+    status: ABTestStatus
+    traffic_split_percent: float
+    target_lines: List[str]
+    started_at: float
+    ended_at: float
+    metrics_a: Dict[str, Any] = field(default_factory=dict)
+    metrics_b: Dict[str, Any] = field(default_factory=dict)
+    sample_count_a: int = 0
+    sample_count_b: int = 0
+    created_by: str = "admin"
+    min_sample_size: int = 1000
+    confidence_level: float = 0.95
+    winner: str = ""
+    notes: str = ""
+    metadata: Dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def create(cls, name: str, model_a_version_id: str, model_b_version_id: str,
+               traffic_split_percent: float = 50.0,
+               target_lines: Optional[List[str]] = None,
+               created_by: str = "admin",
+               min_sample_size: int = 1000,
+               confidence_level: float = 0.95,
+               notes: str = "") -> "ABTestConfig":
+        return cls(
+            test_id=str(uuid.uuid4()),
+            name=name,
+            model_a_version_id=model_a_version_id,
+            model_b_version_id=model_b_version_id,
+            status=ABTestStatus.PENDING,
+            traffic_split_percent=traffic_split_percent,
+            target_lines=target_lines or [],
+            started_at=0.0,
+            ended_at=0.0,
+            created_by=created_by,
+            min_sample_size=min_sample_size,
+            confidence_level=confidence_level,
+            notes=notes
+        )
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "test_id": self.test_id,
+            "name": self.name,
+            "model_a_version_id": self.model_a_version_id,
+            "model_b_version_id": self.model_b_version_id,
+            "status": self.status.value,
+            "traffic_split_percent": self.traffic_split_percent,
+            "target_lines": self.target_lines,
+            "started_at": self.started_at,
+            "ended_at": self.ended_at,
+            "metrics_a": self.metrics_a,
+            "metrics_b": self.metrics_b,
+            "sample_count_a": self.sample_count_a,
+            "sample_count_b": self.sample_count_b,
+            "created_by": self.created_by,
+            "min_sample_size": self.min_sample_size,
+            "confidence_level": self.confidence_level,
+            "winner": self.winner,
+            "notes": self.notes,
+            "metadata": self.metadata
+        }
+
+
+@dataclass
+class RetrainTrigger:
+    trigger_id: str
+    trigger_reason: str
+    status: RetrainTriggerStatus
+    threshold_type: str
+    threshold_value: float
+    actual_value: float
+    consecutive_days: int
+    product_id: str
+    algorithm_type: AlgorithmType
+    sample_count: int
+    started_at: float
+    completed_at: float
+    new_model_version_id: str = ""
+    collection_dir: str = ""
+    training_log: str = ""
+    metrics: Dict[str, Any] = field(default_factory=dict)
+    metadata: Dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def create(cls, trigger_reason: str, threshold_type: str,
+               threshold_value: float, actual_value: float,
+               consecutive_days: int, product_id: str,
+               algorithm_type: AlgorithmType,
+               sample_count: int = 0,
+               collection_dir: str = "") -> "RetrainTrigger":
+        return cls(
+            trigger_id=str(uuid.uuid4()),
+            trigger_reason=trigger_reason,
+            status=RetrainTriggerStatus.PENDING,
+            threshold_type=threshold_type,
+            threshold_value=threshold_value,
+            actual_value=actual_value,
+            consecutive_days=consecutive_days,
+            product_id=product_id,
+            algorithm_type=algorithm_type,
+            sample_count=sample_count,
+            started_at=time.time(),
+            completed_at=0.0,
+            collection_dir=collection_dir
+        )
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "trigger_id": self.trigger_id,
+            "trigger_reason": self.trigger_reason,
+            "status": self.status.value,
+            "threshold_type": self.threshold_type,
+            "threshold_value": self.threshold_value,
+            "actual_value": self.actual_value,
+            "consecutive_days": self.consecutive_days,
+            "product_id": self.product_id,
+            "algorithm_type": self.algorithm_type.value,
+            "sample_count": self.sample_count,
+            "started_at": self.started_at,
+            "completed_at": self.completed_at,
+            "new_model_version_id": self.new_model_version_id,
+            "collection_dir": self.collection_dir,
+            "training_log": self.training_log,
+            "metrics": self.metrics,
+            "metadata": self.metadata
+        }

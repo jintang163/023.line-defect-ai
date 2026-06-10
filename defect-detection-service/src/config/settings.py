@@ -99,3 +99,6 @@ class ConfigManager:
 
     def get_alert_config(self) -> Dict[str, Any]:
         return self._config.get("alert", {})
+
+    def get_model_management_config(self) -> Dict[str, Any]:
+        return self._config.get("model_management", {})

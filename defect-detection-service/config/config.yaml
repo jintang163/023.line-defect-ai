@@ -234,6 +234,20 @@ data_management:
   statistics:
     default_time_range_hours: 24
 
+model_management:
+  enable: true
+  models_dir: "./models"
+  versions_db_path: "./data/model_versions.db"
+  annotations_db_path: "./data/annotations.db"
+  collection_dir: "./data/retrain_samples"
+  retrain_false_positive_threshold: 0.05
+  retrain_false_negative_threshold: 0.05
+  retrain_consecutive_days: 7
+  retrain_sample_days: 14
+  retrain_auto_trigger: true
+  retrain_command: ""
+  retrain_check_interval_sec: 3600
+
 metadata:
   line_id: "line-001"
   station_id: "station-001"

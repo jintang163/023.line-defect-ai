@@ -28,7 +28,8 @@ from src.utils.logger import Logger
 from src.utils.schemas import (
     ImageData, DetectionOutput, ProductConfig, AlgorithmType,
     ManualOverrideAction, DetectionResult, AlertAction,
-    YieldSnapshot
+    YieldSnapshot, ModelVersionStatus, AnnotationType,
+    ABTestStatus, RetrainTriggerStatus
 )
 from src.algorithm_manager import AlgorithmManager
 from src.result_annotator import ResultAnnotator
@@ -71,6 +72,12 @@ try:
     SYSTEM_MONITOR_AVAILABLE = True
 except ImportError:
     SYSTEM_MONITOR_AVAILABLE = False
+
+try:
+    from src.model_manager import ModelManager
+    MODEL_MANAGER_AVAILABLE = True
+except ImportError:
+    MODEL_MANAGER_AVAILABLE = False
 
 logger = Logger("defect-detection-service", "INFO", "./logs/defect-detection.log").logger
 
@@ -233,6 +240,15 @@ class DefectDetectionService:
                 logger.info("✅ 系统配置与监控模块已启用")
             else:
                 logger.info("系统配置与监控模块已禁用")
+
+        self.model_manager = None
+        if MODEL_MANAGER_AVAILABLE:
+            mm_config = self.config_manager.get_model_management_config()
+            if mm_config.get("enable", False):
+                self.model_manager = ModelManager(mm_config)
+                logger.info("✅ 模型管理模块已启用")
+            else:
+                logger.info("模型管理模块已禁用")
 
         logger.info("All components initialized")
 
@@ -404,6 +420,10 @@ class DefectDetectionService:
             self.system_monitor_manager.stop()
             logger.info("System monitor manager stopped")
 
+        if self.model_manager:
+            self.model_manager.close()
+            logger.info("Model manager stopped")
+
         if self._yield_db_conn:
             try:
                 self._yield_db_conn.close()
@@ -562,6 +582,9 @@ class DefectDetectionService:
 
                     elif path == "/monitor" or path == "/monitor.html":
                         self._serve_static_file("frontend/monitor.html", "text/html")
+
+                    elif path == "/model-management" or path == "/model_management.html":
+                        self._serve_static_file("frontend/model_management.html", "text/html")
 
                     elif path.startswith("/frontend/"):
                         self._serve_frontend_file(path)
@@ -996,6 +1019,69 @@ class DefectDetectionService:
                             self._send_json(200, {"users": service.system_monitor_manager.role_manager.list_users()})
                         else:
                             self._send_json(400, {"error": "System monitor not available"})
+
+                    elif path == "/api/model-management/status":
+                        if service.model_manager and service.model_manager.enabled:
+                            self._send_json(200, service.model_manager.get_stats())
+                        else:
+                            self._send_json(400, {"error": "Model management not available"})
+
+                    elif path == "/api/model-management/versions":
+                        if service.model_manager and service.model_manager.enabled:
+                            model_name = params.get("model_name", [None])[0]
+                            algo_type_str = params.get("algorithm_type", [None])[0]
+                            status_str = params.get("status", [None])[0]
+                            algorithm_type = AlgorithmType(algo_type_str) if algo_type_str else None
+                            status = ModelVersionStatus(status_str) if status_str else None
+                            versions = service.model_manager.list_versions(model_name, algorithm_type, status)
+                            self._send_json(200, {"versions": [v.to_dict() for v in versions]})
+                        else:
+                            self._send_json(400, {"error": "Model management not available"})
+
+                    elif path == "/api/model-management/versions/production":
+                        if service.model_manager and service.model_manager.enabled:
+                            model_name = params.get("model_name", [None])[0]
+                            if model_name:
+                                version = service.model_manager.get_production_version(model_name)
+                                self._send_json(200, {"version": version.to_dict() if version else None})
+                            else:
+                                self._send_json(400, {"error": "Missing model_name"})
+                        else:
+                            self._send_json(400, {"error": "Model management not available"})
+
+                    elif path == "/api/model-management/annotations":
+                        if service.model_manager and service.model_manager.enabled:
+                            detection_id = params.get("detection_id", [None])[0]
+                            ann_type_str = params.get("annotation_type", [None])[0]
+                            annotator = params.get("annotator", [None])[0]
+                            limit = int(params.get("limit", [100])[0])
+                            offset = int(params.get("offset", [0])[0])
+                            ann_type = AnnotationType(ann_type_str) if ann_type_str else None
+                            records, total = service.model_manager.list_annotations(
+                                detection_id, ann_type, annotator, limit, offset
+                            )
+                            self._send_json(200, {"annotations": [r.to_dict() for r in records], "total": total})
+                        else:
+                            self._send_json(400, {"error": "Model management not available"})
+
+                    elif path == "/api/model-management/ab-tests":
+                        if service.model_manager and service.model_manager.enabled:
+                            status_str = params.get("status", [None])[0]
+                            ab_status = ABTestStatus(status_str) if status_str else None
+                            tests = service.model_manager.list_ab_tests(ab_status)
+                            self._send_json(200, {"tests": [t.to_dict() for t in tests]})
+                        else:
+                            self._send_json(400, {"error": "Model management not available"})
+
+                    elif path == "/api/model-management/retrain-triggers":
+                        if service.model_manager and service.model_manager.enabled:
+                            status_str = params.get("status", [None])[0]
+                            limit = int(params.get("limit", [50])[0])
+                            rt_status = RetrainTriggerStatus(status_str) if status_str else None
+                            triggers = service.model_manager.list_retrain_triggers(rt_status, limit)
+                            self._send_json(200, {"triggers": [t.to_dict() for t in triggers]})
+                        else:
+                            self._send_json(400, {"error": "Model management not available"})
 
                     else:
                         self._send_json(404, {"error": "Not found"})
@@ -1479,6 +1565,231 @@ class DefectDetectionService:
                         else:
                             self._send_json(400, {"error": "System monitor not available"})
 
+                    elif path == "/api/model-management/upload":
+                        user = self._require_write_auth("full_config")
+                        if not user:
+                            self._send_json(401, {"error": "Authentication required"})
+                        elif not service.model_manager or not service.model_manager.enabled:
+                            self._send_json(400, {"error": "Model management not available"})
+                        else:
+                            model_name = data.get("model_name", "")
+                            version_tag = data.get("version_tag", "")
+                            source_file_path = data.get("file_path", "")
+                            algorithm_type_str = data.get("algorithm_type", "object_detection")
+                            description = data.get("description", "")
+                            parent_version_id = data.get("parent_version_id", "")
+                            operator = data.get("operator", user.get("username", "system"))
+                            if not model_name or not version_tag or not source_file_path:
+                                self._send_json(400, {"error": "Missing required fields: model_name, version_tag, file_path"})
+                            else:
+                                try:
+                                    algorithm_type = AlgorithmType(algorithm_type_str)
+                                except ValueError:
+                                    self._send_json(400, {"error": f"Invalid algorithm_type: {algorithm_type_str}"})
+                                    return
+                                version = service.model_manager.upload_model(
+                                    model_name=model_name,
+                                    version_tag=version_tag,
+                                    source_file_path=source_file_path,
+                                    algorithm_type=algorithm_type,
+                                    uploaded_by=operator,
+                                    description=description,
+                                    parent_version_id=parent_version_id
+                                )
+                                if version:
+                                    self._send_json(200, {"success": True, "version": version.to_dict()})
+                                else:
+                                    self._send_json(500, {"error": "Failed to upload model"})
+
+                    elif path == "/api/model-management/rollback":
+                        user = self._require_write_auth("full_config")
+                        if not user:
+                            self._send_json(401, {"error": "Authentication required"})
+                        elif not service.model_manager or not service.model_manager.enabled:
+                            self._send_json(400, {"error": "Model management not available"})
+                        else:
+                            version_id = data.get("version_id", "")
+                            operator = data.get("operator", user.get("username", "system"))
+                            if not version_id:
+                                self._send_json(400, {"error": "Missing version_id"})
+                            else:
+                                success = service.model_manager.rollback_to_version(version_id, operator)
+                                self._send_json(200, {"success": success})
+
+                    elif path == "/api/model-management/canary":
+                        user = self._require_write_auth("full_config")
+                        if not user:
+                            self._send_json(401, {"error": "Authentication required"})
+                        elif not service.model_manager or not service.model_manager.enabled:
+                            self._send_json(400, {"error": "Model management not available"})
+                        else:
+                            version_id = data.get("version_id", "")
+                            canary_lines = data.get("canary_lines", [])
+                            traffic_percent = data.get("traffic_percent", 10.0)
+                            if not version_id:
+                                self._send_json(400, {"error": "Missing version_id"})
+                            else:
+                                success = service.model_manager.promote_to_canary(version_id, canary_lines, traffic_percent)
+                                self._send_json(200, {"success": success})
+
+                    elif path == "/api/model-management/promote":
+                        user = self._require_write_auth("full_config")
+                        if not user:
+                            self._send_json(401, {"error": "Authentication required"})
+                        elif not service.model_manager or not service.model_manager.enabled:
+                            self._send_json(400, {"error": "Model management not available"})
+                        else:
+                            version_id = data.get("version_id", "")
+                            if not version_id:
+                                self._send_json(400, {"error": "Missing version_id"})
+                            else:
+                                success = service.model_manager.promote_to_production(version_id)
+                                self._send_json(200, {"success": success})
+
+                    elif path == "/api/model-management/annotate":
+                        user = self._require_write_auth("full_config")
+                        if not user:
+                            self._send_json(401, {"error": "Authentication required"})
+                        elif not service.model_manager or not service.model_manager.enabled:
+                            self._send_json(400, {"error": "Model management not available"})
+                        else:
+                            detection_id = data.get("detection_id", "")
+                            image_path = data.get("image_path", "")
+                            annotation_type_str = data.get("annotation_type", "")
+                            original_defect_type = data.get("original_defect_type", "")
+                            corrected_defect_type = data.get("corrected_defect_type", "")
+                            original_bbox = data.get("original_bbox", {})
+                            corrected_bbox = data.get("corrected_bbox", {})
+                            annotator = data.get("annotator", user.get("username", "admin"))
+                            notes = data.get("notes", "")
+                            if not detection_id or not annotation_type_str:
+                                self._send_json(400, {"error": "Missing required fields: detection_id, annotation_type"})
+                            else:
+                                try:
+                                    annotation_type = AnnotationType(annotation_type_str)
+                                except ValueError:
+                                    self._send_json(400, {"error": f"Invalid annotation_type: {annotation_type_str}"})
+                                    return
+                                record = service.model_manager.create_annotation(
+                                    detection_id=detection_id,
+                                    image_path=image_path,
+                                    annotation_type=annotation_type,
+                                    original_defect_type=original_defect_type,
+                                    corrected_defect_type=corrected_defect_type,
+                                    original_bbox=original_bbox,
+                                    corrected_bbox=corrected_bbox,
+                                    annotator=annotator,
+                                    notes=notes
+                                )
+                                if record:
+                                    self._send_json(200, {"success": True, "annotation": record.to_dict()})
+                                else:
+                                    self._send_json(500, {"error": "Failed to create annotation"})
+
+                    elif path == "/api/model-management/ab-test/create":
+                        user = self._require_write_auth("full_config")
+                        if not user:
+                            self._send_json(401, {"error": "Authentication required"})
+                        elif not service.model_manager or not service.model_manager.enabled:
+                            self._send_json(400, {"error": "Model management not available"})
+                        else:
+                            name = data.get("name", "")
+                            model_a = data.get("model_a_version_id", "")
+                            model_b = data.get("model_b_version_id", "")
+                            traffic = data.get("traffic_split_percent", 50.0)
+                            target_lines = data.get("target_lines", [])
+                            min_samples = data.get("min_sample_size", 1000)
+                            notes = data.get("notes", "")
+                            if not name or not model_a or not model_b:
+                                self._send_json(400, {"error": "Missing required fields: name, model_a_version_id, model_b_version_id"})
+                            else:
+                                test = service.model_manager.create_ab_test(
+                                    name=name, model_a_version_id=model_a,
+                                    model_b_version_id=model_b,
+                                    traffic_split_percent=traffic,
+                                    target_lines=target_lines,
+                                    created_by=user.get("username", "admin"),
+                                    min_sample_size=min_samples,
+                                    notes=notes
+                                )
+                                if test:
+                                    self._send_json(200, {"success": True, "test": test.to_dict()})
+                                else:
+                                    self._send_json(500, {"error": "Failed to create A/B test"})
+
+                    elif path == "/api/model-management/ab-test/start":
+                        user = self._require_write_auth("full_config")
+                        if not user:
+                            self._send_json(401, {"error": "Authentication required"})
+                        elif not service.model_manager or not service.model_manager.enabled:
+                            self._send_json(400, {"error": "Model management not available"})
+                        else:
+                            test_id = data.get("test_id", "")
+                            if not test_id:
+                                self._send_json(400, {"error": "Missing test_id"})
+                            else:
+                                success = service.model_manager.start_ab_test(test_id)
+                                self._send_json(200, {"success": success})
+
+                    elif path == "/api/model-management/ab-test/stop":
+                        user = self._require_write_auth("full_config")
+                        if not user:
+                            self._send_json(401, {"error": "Authentication required"})
+                        elif not service.model_manager or not service.model_manager.enabled:
+                            self._send_json(400, {"error": "Model management not available"})
+                        else:
+                            test_id = data.get("test_id", "")
+                            winner = data.get("winner", "")
+                            if not test_id:
+                                self._send_json(400, {"error": "Missing test_id"})
+                            else:
+                                success = service.model_manager.stop_ab_test(test_id, winner)
+                                self._send_json(200, {"success": success})
+
+                    elif path == "/api/model-management/ab-test/switch-full":
+                        user = self._require_write_auth("full_config")
+                        if not user:
+                            self._send_json(401, {"error": "Authentication required"})
+                        elif not service.model_manager or not service.model_manager.enabled:
+                            self._send_json(400, {"error": "Model management not available"})
+                        else:
+                            test_id = data.get("test_id", "")
+                            if not test_id:
+                                self._send_json(400, {"error": "Missing test_id"})
+                            else:
+                                success = service.model_manager.switch_full_to_version(test_id)
+                                self._send_json(200, {"success": success})
+
+                    elif path == "/api/model-management/ab-test/metrics":
+                        user = self._require_write_auth("full_config")
+                        if not user:
+                            self._send_json(401, {"error": "Authentication required"})
+                        elif not service.model_manager or not service.model_manager.enabled:
+                            self._send_json(400, {"error": "Model management not available"})
+                        else:
+                            test_id = data.get("test_id", "")
+                            model_label = data.get("model_label", "")
+                            metrics = data.get("metrics", {})
+                            sample_increment = data.get("sample_increment", 1)
+                            if not test_id or not model_label or model_label not in ("a", "b"):
+                                self._send_json(400, {"error": "Missing test_id or invalid model_label (must be 'a' or 'b')"})
+                            else:
+                                success = service.model_manager.update_ab_test_metrics(test_id, model_label, metrics, sample_increment)
+                                self._send_json(200, {"success": success})
+
+                    elif path == "/api/model-management/retrain/check":
+                        user = self._require_write_auth("full_config")
+                        if not user:
+                            self._send_json(401, {"error": "Authentication required"})
+                        elif not service.model_manager or not service.model_manager.enabled:
+                            self._send_json(400, {"error": "Model management not available"})
+                        else:
+                            product_id = data.get("product_id")
+                            algo_type_str = data.get("algorithm_type")
+                            algorithm_type = AlgorithmType(algo_type_str) if algo_type_str else None
+                            trigger = service.model_manager.check_and_trigger_retrain(product_id, algorithm_type)
+                            self._send_json(200, {"triggered": trigger is not None, "trigger": trigger.to_dict() if trigger else None})
+
                     else:
                         self._send_json(404, {"error": "Not found"})
 
@@ -1628,6 +1939,9 @@ class DefectDetectionService:
             },
             "system_monitor": {
                 "enabled": self.system_monitor_manager is not None and self.system_monitor_manager.enabled
+            },
+            "model_management": {
+                "enabled": self.model_manager is not None and self.model_manager.enabled
             }
         }
 
@@ -1656,6 +1970,9 @@ class DefectDetectionService:
 
         if self.system_monitor_manager and self.system_monitor_manager.enabled:
             stats["system_monitor"] = self.system_monitor_manager.get_stats()
+
+        if self.model_manager and self.model_manager.enabled:
+            stats["model_management"] = self.model_manager.get_stats()
 
         return stats
 
